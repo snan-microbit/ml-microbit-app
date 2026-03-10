@@ -15,6 +15,7 @@ Progressive Web App (PWA) que conecta modelos de **Teachable Machine** con el **
 - **Biblioteca de modelos**: Guarda múltiples modelos
 - **Visualización de audio**: Barras de frecuencia optimizadas para voz
 - **Filtro inteligente**: No envía "Ruido de fondo" al micro:bit
+- **Cambio de cámara**: Alterna entre cámara frontal y trasera en modelos de imagen y pose
 - **Offline-ready**: Service Worker para uso sin conexión
 
 ## Uso Rápido
@@ -40,6 +41,8 @@ Arriba#95\n
 Gato#87\n
 Izquierda#92\n
 ```
+
+Los mensajes se truncan a 20 bytes (límite BLE UART). La conexión se mantiene activa con un heartbeat cada 2 minutos.
 
 ## Extensión para MakeCode
 
@@ -79,11 +82,11 @@ La app usa la identidad visual de Plan Ceibal:
 ## Arquitectura Técnica
 
 ### Stack
-- **Frontend**: Vanilla JavaScript (ES6 modules)
-- **ML**: TensorFlow.js + Teachable Machine libraries
-- **Bluetooth**: Web Bluetooth API (UART)
-- **Storage**: LocalStorage para biblioteca de modelos
-- **PWA**: Service Worker + Web App Manifest
+- **Frontend**: Vanilla JavaScript (ES6 modules), sin frameworks
+- **ML**: TensorFlow.js v1.3.1 + Teachable Machine (image v0.8.3, pose v0.8.3) + Speech Commands v0.4.0
+- **Bluetooth**: Web Bluetooth API (UART) con keep-alive cada 2 minutos
+- **Storage**: LocalStorage para biblioteca de modelos (solo nombres y URLs)
+- **PWA**: Service Worker (network-first) + Web App Manifest
 
 ### Estructura de Archivos
 
@@ -92,6 +95,8 @@ tm-microbit-app/
 ├── index.html           # UI principal
 ├── manifest.json        # PWA manifest
 ├── sw.js               # Service worker
+├── CONTRIBUTING.md      # Guía de contribución
+├── LICENSE             # Licencia MIT
 ├── assets/
 │   ├── icon-192.png    # Iconos PWA
 │   └── icon-512.png
@@ -123,17 +128,19 @@ El visualizador de audio:
 Los modelos de pose usan PoseNet como intermediario:
 
 ```
-Webcam → PoseNet → 17 keypoints → Tu modelo TM → Predicción
+Webcam (400x400) → Canvas (200x200) → PoseNet → 17 keypoints → Tu modelo TM → Predicción
 ```
 
-Se dibuja el esqueleto sobre el video en tiempo real.
+El frame de la webcam se escala a 200x200 antes de la estimación para que los keypoints coincidan con el rango usado durante el entrenamiento en Teachable Machine. Se dibuja el esqueleto sobre el video en tiempo real.
 
 ## Convenciones de Desarrollo
 
 - La lógica de predicciones está en `js/predictions.js`
 - No modificar la integración con micro:bit salvo que se pida explícitamente
 - La función `applyEnvironmentCamera` maneja el flip de cámara (fue problemática, tocar con cuidado)
-- Compatible con iOS Safari y Chrome Android, tener en cuenta limitaciones de cada uno
+- Los loops de predicción (`loopImage`, `loopPose`) usan un flag `predictionInFlight` para evitar llamadas concurrentes de inferencia sin bloquear el render del video
+- La detección de tipo de modelo es automática: primero intenta por URL, luego analiza `metadata.json` y `model.json`
+- Compatible con iOS Safari y Chrome Android, tener en cuenta que Web Bluetooth solo funciona en Chrome/Edge
 
 ## Desarrollo
 
@@ -153,8 +160,8 @@ npx http-server -p 8000 -S
 
 ### Testing
 - **Desktop**: Chrome/Edge (Web Bluetooth habilitado)
-- **Mobile**: Android con Chrome
-- **iOS**: No soporta Web Bluetooth (usar Android)
+- **Mobile**: Android con Chrome (experiencia completa)
+- **iOS**: La PWA carga y los modelos funcionan, pero Web Bluetooth no está soportado en Safari/iOS (no se puede conectar al micro:bit)
 
 ## Despliegue en GitHub Pages
 
