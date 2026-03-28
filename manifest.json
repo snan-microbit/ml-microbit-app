@@ -1,7 +1,7 @@
 {
-  "name": "Teachable Machine + micro:bit",
-  "short_name": "TM+micro:bit",
-  "description": "Conecta modelos de Teachable Machine con micro:bit vía Bluetooth",
+  "name": "ML - micro:bit",
+  "short_name": "ML-micro:bit",
+  "description": "Conecta modelos de Machine Learning con micro:bit vía Bluetooth",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",

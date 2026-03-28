@@ -78,9 +78,7 @@ body {
 
 /* Buttons */
 .btn-primary,
-.btn-secondary,
-.btn-connect,
-.btn-disconnect {
+.btn-secondary {
     width: 100%;
     padding: 1rem;
     border-radius: 12px;
@@ -217,29 +215,6 @@ body {
     color: var(--text-light);
 }
 
-/* ============================================
-   PROCESSING SCREEN
-   ============================================ */
-
-.processing-layout {
-    min-height: 100vh;
-    max-height: 100vh;
-    display: flex;
-    flex-direction: column;
-}
-
-.processing-header {
-    background: var(--surface);
-    border-bottom: 2px solid var(--border);
-    padding: 0.75rem 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    flex-shrink: 0;
-    position: relative;
-}
-
 .btn-back {
     background: none;
     border: none;
@@ -259,19 +234,6 @@ body {
     width: 24px;
     height: 24px;
     stroke: var(--primary);
-}
-
-.processing-header h2 {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: clamp(1rem, 4vw, 1.25rem);
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 50%;
-    text-align: center;
 }
 
 .badge {
@@ -327,34 +289,12 @@ body {
     50% { opacity: 0.5; }
 }
 
-.processing-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1rem;
-    overflow: hidden;
-}
-
-.webcam-container {
-    background: var(--surface);
-    border-radius: 12px;
-    box-shadow: var(--shadow);
-    overflow: hidden;
-    width: 100%;
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-}
-
-.btn-flip-camera {
+/* === Video overlay action buttons (flip + expand) === */
+.btn-video-action {
     position: absolute;
     bottom: 0.75rem;
-    right: 0.75rem;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     border: none;
     background: rgba(0, 0, 0, 0.45);
@@ -369,50 +309,93 @@ body {
     transition: background 0.2s;
 }
 
-.btn-flip-camera:active {
+.btn-video-action:active {
     background: rgba(0, 0, 0, 0.7);
     transform: scale(0.93);
 }
 
-.btn-flip-camera.hidden {
-    display: none;
+.btn-video-flip {
+    right: 3.5rem;
 }
 
-#webcam-wrapper {
+.btn-video-expand {
+    right: 0.75rem;
+}
+
+/* Expand/minimize icon toggling */
+.btn-video-expand .icon-minimize {
+    display: none;
+}
+body.prediction-expanded .btn-video-expand .icon-expand {
+    display: none;
+}
+body.prediction-expanded .btn-video-expand .icon-minimize {
+    display: flex;
+}
+
+/* prediction-video-area: relative container for overlay buttons */
+.prediction-video-area {
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* === Expanded prediction mode === */
+body.prediction-expanded .prediction-main-column {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: var(--bg);
+    display: flex !important;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+body.prediction-expanded .prediction-main-content {
+    padding: 0;
+    overflow: hidden;
+    gap: 0;
+}
+
+body.prediction-expanded .prediction-video-area {
+    flex: 1;
     width: 100%;
-    height: 100%;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
+    background: var(--bg);
+    padding: 0.75rem;
 }
 
-#webcam-wrapper canvas {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto !important;
-    height: auto !important;
-}
-
-.predictions-panel {
-    background: var(--surface);
+body.prediction-expanded .prediction-webcam-wrapper {
     border-radius: 12px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+body.prediction-expanded .prediction-webcam-wrapper canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+body.prediction-expanded #prediction-predictions {
+    padding: 0.5rem 0;
+    background: var(--bg);
+    max-height: 35vh;
     overflow-y: auto;
-    flex: 1 1 auto;
-    min-height: 0; /* Importante para que flex funcione correctamente */
+    flex-shrink: 0;
+    width: 100%;
+    align-self: center;
+    max-width: var(--expanded-video-size, 100%);
 }
 
-.predictions-panel h3 {
-    font-size: 1.1rem;
-    margin-bottom: 0.75rem;
-    font-weight: 700;
-}
-
-#predictions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+body.prediction-expanded .prediction-actions {
+    align-self: center;
+    width: 100%;
+    max-width: var(--expanded-video-size, 100%);
+    padding: 0 0 0.5rem;
 }
 
 .prediction-item {
@@ -457,171 +440,6 @@ body {
     transition: width 0.3s;
 }
 
-.processing-actions {
-    background: var(--surface);
-    border-top: 2px solid var(--border);
-    padding: 0.5rem 1rem;
-    flex-shrink: 0;
-}
-
-.btn-connect {
-    background: var(--success);
-    color: white;
-    max-width: 400px;
-    width: 100%;
-    margin: 0 auto;
-    display: block;
-}
-
-.btn-connect:active {
-    background: #008a47;
-}
-
-.btn-disconnect {
-    background: var(--error);
-    color: white;
-    max-width: 400px;
-    width: 100%;
-    margin: 0 auto;
-    display: block;
-}
-
-.btn-disconnect:active {
-    background: #c5303e;
-}
-
-.btn-makecode {
-    background: #5c6bc0;
-    color: white;
-    max-width: 400px;
-    width: 100%;
-    margin: 0.35rem auto 0;
-    display: block;
-    padding: 0.75rem;
-    border-radius: 12px;
-    font-size: 1rem;
-    font-weight: 700;
-    cursor: pointer;
-    border: none;
-    touch-action: manipulation;
-    min-height: 44px;
-    transition: all 0.2s;
-}
-
-.btn-makecode:active {
-    background: #3949ab;
-    transform: scale(0.98);
-}
-
-/* ============================================
-   MAKECODE SCREEN
-   ============================================ */
-
-.makecode-layout {
-    min-height: 100vh;
-    max-height: 100vh;
-    display: flex;
-    flex-direction: column;
-}
-
-.makecode-header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0.25rem 0.75rem;
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-    min-height: 36px;
-}
-
-.btn-home-from-mc {
-    background: none;
-    color: var(--text-light);
-    border: none;
-    border-radius: 8px;
-    padding: 0.4rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: manipulation;
-}
-
-.btn-home-from-mc:active {
-    background: var(--bg);
-}
-
-.btn-run-model {
-    background: var(--primary);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 0.3rem 0.875rem;
-    font-size: 0.85rem;
-    font-weight: 700;
-    cursor: pointer;
-    font-family: inherit;
-    touch-action: manipulation;
-    margin-left: auto;
-}
-
-.btn-run-model:active {
-    background: var(--primary-hover);
-    transform: scale(0.97);
-}
-
-.open-project-options {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.btn-project-option {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    width: 100%;
-    padding: 1rem;
-    background: var(--bg);
-    border: 2px solid var(--border);
-    border-radius: 12px;
-    cursor: pointer;
-    font-family: inherit;
-    text-align: left;
-    transition: all 0.2s;
-}
-
-.btn-project-option:active {
-    border-color: var(--primary);
-    background: #e8f5f4;
-    transform: scale(0.98);
-}
-
-.option-icon {
-    font-size: 1.75rem;
-    flex-shrink: 0;
-}
-
-.option-label {
-    display: block;
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text);
-    margin-bottom: 0.2rem;
-}
-
-.option-desc {
-    display: block;
-    font-size: 0.8rem;
-    color: var(--text-light);
-    font-weight: 400;
-}
-
-.btn-project-option > span:not(.option-icon) {
-    display: flex;
-    flex-direction: column;
-}
-
 .model-card-classes {
     font-size: 0.8rem;
     color: var(--primary);
@@ -630,21 +448,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.makecode-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-}
-
-#makecodeFrame {
-    flex: 1;
-    width: 100%;
-    border: none;
-    display: block;
 }
 
 /* ============================================
@@ -818,23 +621,6 @@ body {
     }
 }
 
-@media (min-width: 768px) {
-    .processing-content {
-        flex-direction: row;
-        padding: 1.5rem;
-        gap: 1.5rem;
-    }
-    
-    .webcam-container {
-        flex: 2;
-        aspect-ratio: auto;
-    }
-    
-    .predictions-panel {
-        flex: 1;
-        min-height: auto;
-    }
-}
 
 @media (min-width: 1024px) {
     .container {
@@ -855,16 +641,990 @@ button, a, input {
     touch-action: manipulation;
 }
 
-/* Safe area para notch */
-@supports (padding: max(0px)) {
-    .processing-header {
-        padding-left: max(1rem, env(safe-area-inset-left));
-        padding-right: max(1rem, env(safe-area-inset-right));
+/* ============================================
+   TRAINING SCREEN
+   ============================================ */
+
+.training-layout {
+    min-height: 100vh;
+    max-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.training-header {
+    height: 36px;
+    padding: 0 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.training-header .btn-back {
+    padding: 4px;
+    min-width: 28px;
+    min-height: 28px;
+    background: none;
+    border: none;
+    flex-shrink: 0;
+}
+
+.training-header h2 {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-light);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+
+.btn-sm {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    min-height: 36px;
+    width: auto;
+}
+
+.btn-sm:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.training-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.training-webcam-container {
+    background: var(--surface);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    width: 100%;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    flex-shrink: 0;
+}
+
+#training-webcam-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#training-webcam-wrapper canvas {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto !important;
+    height: auto !important;
+}
+
+.training-classes-panel {
+    background: var(--surface);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 1rem;
+    flex: 1;
+}
+
+.training-classes-panel h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+}
+
+#trainingClassesList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.training-class-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.class-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+}
+
+.class-card-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.class-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.class-card-header .class-name-input {
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    background: transparent;
+    padding: 2px 0;
+    min-width: 0;
+    flex: 1;
+    font-family: inherit;
+    border-bottom: 1.5px solid transparent;
+}
+
+.class-card-header .class-name-input:focus {
+    outline: none;
+    border-bottom-color: currentColor;
+}
+
+.class-card-header-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sample-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sample-badge:hover {
+    filter: brightness(0.93);
+}
+
+
+.class-card-body {
+    padding: 12px 14px;
+}
+
+.class-capture-buttons {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.btn-capture-one,
+.btn-capture-hold {
+    width: auto;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+}
+
+.btn-capture-one {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.btn-capture-one:active {
+    background: var(--bg);
+    transform: scale(0.98);
+}
+
+.btn-capture-hold {
+    color: white;
+    border: none;
+}
+
+.btn-capture-hold:active {
+    filter: brightness(0.9);
+    transform: scale(0.98);
+}
+
+.btn-capture-hold.capturing {
+    background: #e63946 !important;
+    animation: pulse-capture 0.8s infinite;
+}
+
+.hold-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: white;
+    opacity: 0.85;
+    flex-shrink: 0;
+}
+
+@keyframes pulse-capture {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.sample-gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-top: 4px;
+    margin-bottom: 8px;
+    max-height: 120px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.12) transparent;
+}
+
+.sample-thumb {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+}
+
+.sample-thumb img {
+    width: 36px;
+    height: 36px;
+    object-fit: cover;
+    border-radius: 4px;
+    display: block;
+}
+
+.btn-delete-sample {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--error);
+    color: white;
+    border: 1.5px solid white;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+    z-index: 1;
+}
+
+.btn-delete-sample:active {
+    background: #c5303e;
+    transform: scale(0.9);
+}
+
+
+.btn-add-class {
+    width: auto;
+    align-self: flex-start;
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 700;
+    background: var(--surface);
+    color: var(--primary);
+    border: 2px dashed var(--primary);
+    cursor: pointer;
+    font-family: inherit;
+    touch-action: manipulation;
+}
+
+.btn-add-class:active {
+    background: #e8f5f4;
+}
+
+.training-actions {
+    background: var(--surface);
+    border-top: 2px solid var(--border);
+    padding: 0.75rem 1rem;
+    flex-shrink: 0;
+}
+
+.training-actions .btn-primary {
+    max-width: 400px;
+    margin: 0 auto;
+    display: block;
+}
+
+.training-actions .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.training-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.3s;
+    width: 0%;
+}
+
+/* ============================================
+   PROJECT TYPE MODAL
+   ============================================ */
+
+.project-type-options {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.btn-project-type {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 1.25rem;
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.2s;
+    font-family: inherit;
+    width: 100%;
+}
+
+.btn-project-type:active {
+    border-color: var(--primary);
+    background: #e8f5f4;
+}
+
+.type-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+    line-height: 1;
+}
+
+.type-label {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--text);
+    display: block;
+}
+
+.type-desc {
+    font-size: 0.9rem;
+    color: var(--text-light);
+    margin-top: 0.25rem;
+    display: block;
+}
+
+/* ============================================
+   TRAINING SCREEN - DESKTOP RESPONSIVE
+   ============================================ */
+
+@media (min-width: 768px) {
+    .training-content {
+        flex-direction: row;
+        padding: 1.5rem;
+        gap: 1.5rem;
+        overflow: hidden;
     }
-    
-    .processing-actions {
-        padding-left: max(1rem, env(safe-area-inset-left));
-        padding-right: max(1rem, env(safe-area-inset-right));
-        padding-bottom: max(1rem, env(safe-area-inset-bottom));
+
+    .training-webcam-container {
+        flex: 1;
+        aspect-ratio: auto;
+        max-width: 50%;
+    }
+
+    .training-classes-panel {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
     }
 }
+
+/* ============================================
+   TRAINING SCREEN
+   ============================================ */
+
+.training-capture-section {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+}
+
+.training-capture-section.hidden {
+    display: none;
+}
+
+.capture-webcam-column {
+    flex: 1;
+    min-width: 0;
+    border-right: 2px solid var(--border);
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+}
+
+.capture-webcam-container {
+    width: 100%;
+    max-width: 340px;
+    aspect-ratio: 1;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+}
+
+.capture-webcam-container canvas {
+    width: 100% !important;
+    height: auto !important;
+    display: block;
+}
+
+.capture-classes-column {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1.25rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
+}
+
+.capture-classes-column::-webkit-scrollbar {
+    width: 4px;
+}
+
+.capture-classes-column::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+    border-radius: 2px;
+}
+
+.capture-classes-column::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ============================================
+   PREDICTION SCREEN
+   ============================================ */
+
+.prediction-layout {
+    min-height: 100vh;
+    max-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.prediction-header {
+    height: 36px;
+    padding: 0 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.prediction-header .btn-back {
+    padding: 4px;
+    min-width: 28px;
+    min-height: 28px;
+    background: none;
+    border: none;
+    flex-shrink: 0;
+}
+
+.prediction-header h2 {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-light);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+
+.prediction-body {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.prediction-main-column {
+    flex: 0 0 320px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 2px solid var(--border);
+}
+
+.prediction-main-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
+}
+
+.prediction-main-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.prediction-main-content::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+    border-radius: 2px;
+}
+
+@media (max-width: 700px) {
+    .training-capture-section {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+    .capture-webcam-column {
+        width: 100%;
+        flex-shrink: 0;
+        border-right: none;
+        border-bottom: none;
+        padding: 0.75rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        background: transparent;
+    }
+    .capture-webcam-container {
+        width: 50%;
+        max-width: 200px;
+    }
+}
+
+#trainingClassesList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.training-train-area {
+    margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* "Entrenar" compacto — override del width: 100% global */
+.training-train-area .btn-primary {
+    width: auto;
+    padding: 0.625rem 1.5rem;
+    font-size: 1rem;
+    min-height: 40px;
+    border-radius: 8px;
+    box-shadow: none;
+}
+
+.train-btn-pct {
+    display: none;
+    font-size: 0.8em;
+    opacity: 0.85;
+    margin-left: 0.4rem;
+}
+
+#trainBtn.training .train-btn-pct {
+    display: inline;
+}
+
+.class-menu-wrapper {
+    position: relative;
+}
+
+.btn-class-menu {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 3px 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+    transition: opacity 0.15s, background 0.15s;
+    min-width: 26px;
+    min-height: 26px;
+}
+
+.btn-class-menu:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.class-dropdown {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    z-index: 200;
+    min-width: 160px;
+    overflow: hidden;
+}
+
+.class-dropdown.open {
+    display: block;
+}
+
+.class-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-family: inherit;
+    color: var(--text, #333);
+    text-align: left;
+    transition: background 0.12s;
+    white-space: nowrap;
+}
+
+.class-dropdown-item:hover {
+    background: var(--bg, #f5f5f5);
+}
+
+.class-dropdown-item:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.class-dropdown-item:disabled:hover {
+    background: none;
+}
+
+.class-dropdown-item.danger {
+    color: #e53935;
+}
+
+.class-dropdown-item.danger:hover {
+    background: #fef2f2;
+}
+
+/* Acciones en la sección de predicciones */
+.prediction-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.btn-pred-connect {
+    flex: 1;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    background: var(--primary);
+    color: #fff;
+    transition: background 0.15s;
+}
+
+.btn-pred-connect:hover {
+    background: var(--primary-hover);
+}
+
+.btn-pred-connect.connected {
+    background: var(--error);
+}
+
+.btn-pred-connect.connected:hover {
+    background: #c0303b;
+}
+
+.btn-pred-retrain {
+    flex: 1;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: var(--primary);
+    border: 1.5px solid var(--primary);
+    transition: background 0.15s;
+}
+
+.btn-pred-retrain:hover {
+    background: rgba(0, 159, 149, 0.08);
+}
+
+
+.prediction-webcam-wrapper {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #000;
+}
+
+.prediction-webcam-wrapper canvas {
+    width: 100% !important;
+    height: auto !important;
+}
+
+.training-predictions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+
+/* MakeCode inline panel */
+.makecode-inline-panel {
+    flex: 1;
+    min-width: 480px;
+    display: flex;
+    flex-direction: column;
+    border-left: 2px solid var(--border);
+    overflow: hidden;
+}
+
+.makecode-inline-panel.hidden {
+    display: none;
+}
+
+
+.makecode-inline-panel iframe {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: none;
+    min-height: 500px;
+}
+
+
+.class-capture-buttons {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+    margin-bottom: 0.625rem;
+}
+
+/* ============================================
+   AUDIO TRAINING — recording buttons & sample bar
+   ============================================ */
+
+.btn-audio-record,
+.btn-audio-record-hold {
+    width: auto;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+.btn-audio-record {
+    background: var(--primary);
+    color: white;
+    border: none;
+}
+
+.btn-audio-record:active {
+    background: var(--primary-hover);
+    transform: scale(0.98);
+}
+
+.btn-audio-record-hold {
+    background: var(--surface);
+    color: var(--primary);
+    border: 1.5px solid var(--primary);
+}
+
+.btn-audio-record.recording {
+    background: #e63946;
+    animation: pulse-recording 0.6s infinite;
+}
+
+.btn-audio-record-hold.capturing {
+    background: #e63946 !important;
+    color: white;
+    border-color: #c5303e;
+    animation: pulse-recording 0.6s infinite;
+}
+
+@keyframes pulse-recording {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Sample progress bar inside audio class card */
+.audio-sample-info {
+    margin-bottom: 8px;
+}
+
+.audio-sample-bar-wrap {
+    height: 6px;
+    background: #e0e0e0;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.audio-sample-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+@media (max-width: 1023px) {
+    /* prediction screen: MakeCode arriba, video+preds abajo */
+    .prediction-body {
+        flex-direction: column-reverse;
+    }
+
+    .prediction-main-column {
+        flex: 0 0 auto;
+        border-right: none;
+        border-top: 1px solid var(--border);
+    }
+
+    .prediction-main-content {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        overflow-y: visible;
+    }
+
+    .prediction-body .makecode-inline-panel {
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        border-left: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .prediction-body .makecode-inline-panel iframe {
+        min-height: 0;
+    }
+
+    .prediction-webcam-wrapper {
+        width: 160px;
+        height: 160px;
+        aspect-ratio: auto;
+        flex-shrink: 0;
+        border-radius: 8px;
+    }
+
+    .prediction-webcam-wrapper canvas {
+        width: 160px !important;
+        height: 160px !important;
+    }
+
+    .training-predictions {
+        flex: 1;
+        min-width: 100px;
+    }
+
+    .prediction-item {
+        padding: 0.5rem 0.625rem;
+    }
+
+    .prediction-header {
+        margin-bottom: 0.25rem;
+    }
+
+    .class-name,
+    .confidence {
+        font-size: 0.875rem;
+    }
+
+    .prediction-actions {
+        width: 100%;
+    }
+
+    .btn-video-action {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+
+

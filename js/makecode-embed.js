@@ -2,11 +2,15 @@
  * makecode-embed.js
  * Embeds MakeCode editor in an iframe and loads a pre-configured project
  * with the TM micro:bit link extension and dynamic class names.
+ *
+ * Supports multiple independent iframes via the optional `iframeId` parameter.
+ * Each iframe has its own message handler stored in `messageHandlers`.
  */
 
 const MAKECODE_URL = "https://makecode.microbit.org";
 
-let messageHandler = null;
+// Map of iframeId → registered message handler
+const messageHandlers = {};
 
 function generateTmClassesTs(classNames) {
     const enumMembers = classNames.map((name, i) => {
@@ -25,7 +29,7 @@ function generateProject(classNames, projectName) {
         "dependencies": {
             "core": "*",
             "bluetooth": "*",
-            "pxt-tm-microbit-link": "github:snan-microbit/pxt-tm-microbit-link-v2"
+            "pxt-tm-microbit-link": "github:snan-microbit/pxt-tm-microbit-link-v2#2999f770f1deeea37678e47c7f38ef7477627245"
         },
         "files": ["main.blocks", "main.ts", "tm-classes.ts", "README.md"],
         "yotta": { "config": { "microbit-dal": { "bluetooth": { "open": 1 } } } }
@@ -43,21 +47,24 @@ function generateProject(classNames, projectName) {
 }
 
 /**
- * Opens MakeCode in the iframe.
- * @param {string[]} classNames  - Class names from the TM model
- * @param {object|null} savedProject - Previously saved project object ({ text: {...} }) or null for new
- * @param {function|null} onSave - Callback called with the project object each time MakeCode saves
- * @param {string} [projectName] - Project name used when generating a fresh project
+ * Opens MakeCode in the given iframe.
+ * @param {string[]} classNames     - Class names from the TM model
+ * @param {object|null} savedProject - Previously saved project or null for new
+ * @param {function|null} onSave    - Callback called with the project each time MakeCode saves
+ * @param {string} [projectName]    - Project name for fresh projects
+ * @param {string} [iframeId]       - ID of the iframe element (default: 'makecodeFrame')
  */
-function openMakeCode(classNames, savedProject, onSave, projectName) {
-    const iframe = document.getElementById('makecodeFrame');
+function openMakeCode(classNames, savedProject, onSave, projectName, iframeId = 'makecodeFrame', hideSimulator = false) {
+    const iframe = document.getElementById(iframeId);
+    if (!iframe) return;
 
-    if (messageHandler) {
-        window.removeEventListener('message', messageHandler);
-        messageHandler = null;
+    // Remove any existing handler for this iframe
+    if (messageHandlers[iframeId]) {
+        window.removeEventListener('message', messageHandlers[iframeId]);
+        delete messageHandlers[iframeId];
     }
 
-    messageHandler = (event) => {
+    const handler = (event) => {
         if (event.source !== iframe.contentWindow) return;
 
         const data = event.data;
@@ -82,6 +89,10 @@ function openMakeCode(classNames, savedProject, onSave, projectName) {
                 editor: {}
             };
             iframe.contentWindow.postMessage(response, '*');
+
+            if (hideSimulator) {
+                iframe.contentWindow.postMessage({ type: 'pxteditor', action: 'hidesimulator' }, '*');
+            }
         } else if (data.action === 'workspacesave') {
             if (data.project && onSave) {
                 onSave(data.project);
@@ -89,20 +100,22 @@ function openMakeCode(classNames, savedProject, onSave, projectName) {
         }
     };
 
-    window.addEventListener('message', messageHandler);
+    messageHandlers[iframeId] = handler;
+    window.addEventListener('message', handler);
     iframe.src = MAKECODE_URL + '?controller=1';
 }
 
 /**
- * Closes MakeCode: clears the iframe and removes the message listener.
+ * Closes MakeCode: clears the iframe src and removes the message listener.
+ * @param {string} [iframeId] - ID of the iframe element (default: 'makecodeFrame')
  */
-function closeMakeCode() {
-    if (messageHandler) {
-        window.removeEventListener('message', messageHandler);
-        messageHandler = null;
+function closeMakeCode(iframeId = 'makecodeFrame') {
+    if (messageHandlers[iframeId]) {
+        window.removeEventListener('message', messageHandlers[iframeId]);
+        delete messageHandlers[iframeId];
     }
-    const iframe = document.getElementById('makecodeFrame');
-    iframe.src = 'about:blank';
+    const iframe = document.getElementById(iframeId);
+    if (iframe) iframe.src = 'about:blank';
 }
 
 export { openMakeCode, closeMakeCode };

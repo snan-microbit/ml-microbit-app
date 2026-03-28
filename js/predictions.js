@@ -18,6 +18,19 @@ let microphone = null;
 let predictionInFlight = false; // prevents concurrent ML inference calls
 let lastPose = null;            // last pose result, drawn every frame for smooth overlay
 
+// Configurable element IDs — can be overridden to embed predictions in other screens
+let wrapperElementId = 'webcam-wrapper';
+let containerElementId = 'predictions';
+
+/**
+ * Override which DOM elements predictions.js writes to.
+ * Call before startPredictions(). Resets to defaults on stopPredictions().
+ */
+function configurePredictions({ wrapperElementId: wId, containerElementId: cId } = {}) {
+    if (wId) wrapperElementId = wId;
+    if (cId) containerElementId = cId;
+}
+
 /**
  * Replace the TM Webcam's internal stream with an environment-facing stream.
  * Called after webcam.setup() which always opens the front camera.
@@ -89,9 +102,12 @@ async function startPredictions() {
  */
 function stopPredictions() {
     isRunning = false;
-    
     predictionInFlight = false;
     lastPose = null;
+
+    // Reset element IDs to defaults so the next caller starts clean
+    wrapperElementId = 'webcam-wrapper';
+    containerElementId = 'predictions';
 
     // Cleanup webcam — explicitly stop MediaStream tracks since TM's webcam.stop()
     // only pauses the video element and doesn't release the camera hardware
@@ -139,7 +155,7 @@ async function setupWebcam() {
         }
         await webcam.play();
 
-        const wrapper = document.getElementById('webcam-wrapper');
+        const wrapper = document.getElementById(wrapperElementId);
         wrapper.innerHTML = '';
         wrapper.appendChild(webcam.canvas);
         window.requestAnimationFrame(loopImage);
@@ -182,7 +198,7 @@ async function setupPoseWebcam() {
         displayCanvas.width = 400;
         displayCanvas.height = 400;
 
-        const wrapper = document.getElementById('webcam-wrapper');
+        const wrapper = document.getElementById(wrapperElementId);
         wrapper.innerHTML = '';
         wrapper.appendChild(displayCanvas);
 
@@ -207,10 +223,10 @@ async function setupAudio() {
         canvas.height = 400;
         canvas.id = 'audio-visualizer';
         
-        const wrapper = document.getElementById('webcam-wrapper');
+        const wrapper = document.getElementById(wrapperElementId);
         wrapper.innerHTML = '';
         wrapper.appendChild(canvas);
-        
+
         // Setup audio context for visualization
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         microphone = stream;
@@ -490,7 +506,7 @@ function drawPose(pose, ctx, scale = 1) {
  * Display predictions in UI and send to micro:bit
  */
 function displayPredictions(predictions) {
-    const container = document.getElementById('predictions');
+    const container = document.getElementById(containerElementId);
     if (!container) return;
     
     if (!predictions || !Array.isArray(predictions)) {
@@ -582,7 +598,7 @@ async function flipCamera() {
         webcam = null;
     }
     predictionCanvas = null;
-    document.getElementById('webcam-wrapper').innerHTML = '';
+    document.getElementById(wrapperElementId).innerHTML = '';
 
     try {
         if (modelType === 'image') {
@@ -603,4 +619,4 @@ async function flipCamera() {
     }
 }
 
-export { startPredictions, stopPredictions, flipCamera };
+export { startPredictions, stopPredictions, flipCamera, configurePredictions, applyEnvironmentCamera };

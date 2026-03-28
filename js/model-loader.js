@@ -135,9 +135,49 @@ async function detectModelTypeFromMetadata(baseURL) {
 }
 
 /**
- * Load Teachable Machine model from URL
+ * Load model — accepts either a TM URL string or a project object with localModel.
  */
-async function loadModel(modelURL) {
+async function loadModel(modelURLorProject) {
+    // Local audio model trained in-app
+    if (typeof modelURLorProject === 'object'
+            && modelURLorProject.localModel?.source === 'local-audio') {
+        const audioModule = await import('./audio-trainer.js');
+        await audioModule.loadSavedModel(modelURLorProject.localModel);
+
+        model = {
+            listen: (cb, opts) => audioModule.startListening(cb, opts),
+            stopListening: () => audioModule.stopListening(),
+            wordLabels: () => audioModule.getClassNames(),
+            getTotalClasses: () => audioModule.getTotalClasses(),
+            getClassLabels: () => audioModule.getClassNames()
+        };
+        modelType = 'audio';
+        maxPredictions = audioModule.getTotalClasses();
+        console.log(`✅ Local audio model loaded: ${maxPredictions} classes`);
+        return model;
+    }
+
+    // Local image model trained in-app
+    if (typeof modelURLorProject === 'object' && modelURLorProject.localModel) {
+        const trainerModule = await import('./image-trainer.js');
+        await trainerModule.loadSavedModel(modelURLorProject.localModel);
+
+        model = {
+            predict: (canvas) => trainerModule.predict(canvas),
+            getTotalClasses: () => trainerModule.getTotalClasses(),
+            getClassLabels: () => trainerModule.getClassNames()
+        };
+        modelType = 'image';
+        maxPredictions = trainerModule.getTotalClasses();
+        console.log(`✅ Local model loaded: ${maxPredictions} classes`);
+        return model;
+    }
+
+    // Teachable Machine remote model
+    const modelURL = typeof modelURLorProject === 'string'
+        ? modelURLorProject
+        : modelURLorProject.url;
+
     // Wait for TM libraries
     let attempts = 0;
     while (!window.tmImage || !window.tmPose) {
@@ -147,26 +187,26 @@ async function loadModel(modelURL) {
         await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
     }
-    
+
     const modelPath = modelURL.endsWith('/') ? modelURL : modelURL + '/';
-    
+
     // Detect model type
     modelType = detectModelTypeFromURL(modelURL);
     console.log(`🔍 URL detection result: ${modelType || 'none'}`);
-    
+
     if (!modelType) {
         modelType = await detectModelTypeFromMetadata(modelPath);
     }
-    
+
     if (!modelType) {
         throw new Error('Could not detect model type');
     }
-    
+
     console.log(`🔍 Final detected model type: ${modelType}`);
-    
+
     const modelJsonURL = modelPath + 'model.json';
     const metadataURL = modelPath + 'metadata.json';
-    
+
     // Load model based on type
     if (modelType === 'image') {
         model = await window.tmImage.load(modelJsonURL, metadataURL);
@@ -184,18 +224,18 @@ async function loadModel(modelURL) {
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        
+
         model = window.speechCommands.create(
             'BROWSER_FFT',
             undefined,
             modelPath + 'model.json',
             modelPath + 'metadata.json'
         );
-        
+
         await model.ensureModelLoaded();
         maxPredictions = model.wordLabels().length;
     }
-    
+
     console.log(`✅ Model loaded: ${modelType}, ${maxPredictions} classes`);
     return model;
 }

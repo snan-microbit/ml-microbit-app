@@ -3,19 +3,49 @@
  * Main application logic
  */
 
-import { loadModel, getModelType, getClassNames, extractClassNames } from './model-loader.js';
-import { connectMicrobit, disconnectMicrobit, setDisconnectCallback } from './bluetooth.js';
-import { startPredictions, stopPredictions, flipCamera } from './predictions.js';
+import { loadModel, extractClassNames } from './model-loader.js';
+import { connectMicrobit, disconnectMicrobit, sendToMicrobit, isConnected, setDisconnectCallback } from './bluetooth.js';
+import { startPredictions, stopPredictions, configurePredictions, applyEnvironmentCamera } from './predictions.js';
 import { openMakeCode, closeMakeCode } from './makecode-embed.js';
+import * as trainer from './image-trainer.js';
+import * as audioTrainer from './audio-trainer.js';
 
 let currentModel = null;
 const MODELS_KEY = 'tm_microbit_models';
 
+// Tracks which type of project is being created via the name modal
+let pendingProjectType = 'image'; // 'image' | 'audio'
+
+// Webcam unificada: se mueve entre clases (captura) y sección de predicciones
+let activeWebcam = null;
+let activeWebcamTarget = null;  // 'capture' | 'prediction' | null
+let predictionLoopRunning = false;
+let trainingFacingMode = 'user'; // 'user' | 'environment'
+let predictionExpanded = false;
+
+const CLASS_COLORS = [
+    { bg: '#E1F5EE', dot: '#1D9E75', btnFill: '#1D9E75', badge: '#9FE1CB', badgeText: '#0F6E56', headerText: '#085041', icon: '#0F6E56' },
+    { bg: '#E6F1FB', dot: '#378ADD', btnFill: '#378ADD', badge: '#B5D4F4', badgeText: '#185FA5', headerText: '#0C447C', icon: '#185FA5' },
+    { bg: '#FAECE7', dot: '#D85A30', btnFill: '#D85A30', badge: '#F5C4B3', badgeText: '#993C1D', headerText: '#712B13', icon: '#993C1D' },
+    { bg: '#EEEDFE', dot: '#7F77DD', btnFill: '#7F77DD', badge: '#CECBF6', badgeText: '#534AB7', headerText: '#3C3489', icon: '#534AB7' },
+    { bg: '#FBEAF0', dot: '#D4537E', btnFill: '#D4537E', badge: '#F4C0D1', badgeText: '#993556', headerText: '#72243E', icon: '#993556' },
+    { bg: '#FAEEDA', dot: '#BA7517', btnFill: '#BA7517', badge: '#FAC775', badgeText: '#854F0B', headerText: '#633806', icon: '#854F0B' },
+];
+
+function getClassColor(index) {
+    return CLASS_COLORS[index % CLASS_COLORS.length];
+}
+
+function getTrainer() {
+    return currentModel?.projectType === 'audio' ? audioTrainer : trainer;
+}
+
 function resetConnectionUI() {
-    document.getElementById('connectBtn').style.display = 'block';
-    document.getElementById('disconnectBtn').style.display = 'none';
-    document.getElementById('connectionBadge').textContent = 'Desconectado';
-    document.getElementById('connectionBadge').className = 'badge badge-disconnected';
+    const pConn = document.getElementById('predictionConnectBtn');
+    if (pConn && pConn.classList.contains('connected')) {
+        pConn.classList.remove('connected');
+        pConn.textContent = '🔗 Conectar';
+    }
 }
 setDisconnectCallback(resetConnectionUI);
 
@@ -32,24 +62,44 @@ function saveModels(models) {
     localStorage.setItem(MODELS_KEY, JSON.stringify(models));
 }
 
-function addProject(name, url, classNames) {
+function addProject(name, url, classNames, projectType) {
     const models = loadModels();
     const newModel = {
         id: Date.now().toString(),
         name: name.trim(),
-        url: url.trim(),
-        classNames,
-        makecodeProject: null,
         createdAt: new Date().toISOString(),
-        lastUsed: new Date().toISOString()
+        lastUsed: new Date().toISOString(),
+        makecodeProject: null,
     };
+
+    if (url) {
+        newModel.url = url.trim();
+        newModel.classNames = classNames || [];
+    }
+
+    if (projectType) {
+        newModel.projectType = projectType;
+    }
+
     models.unshift(newModel);
     saveModels(models);
     return newModel;
 }
 
-function deleteModel(id) {
+async function deleteModel(id) {
     const models = loadModels();
+    const project = models.find(m => m.id === id);
+
+    if (project?.localModel?.storageKey) {
+        if (project.localModel.source === 'local-audio') {
+            await audioTrainer.deleteModel(project.localModel.storageKey);
+            await audioTrainer.deleteSamplesDB(id);
+        } else {
+            await trainer.deleteModel(project.localModel.storageKey);
+            await trainer.deleteSamplesDB(id);
+        }
+    }
+
     saveModels(models.filter(m => m.id !== id));
 }
 
@@ -93,16 +143,22 @@ function renderModels() {
     `).join('');
 
     modelsList.querySelectorAll('[data-action="open"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const model = models.find(m => m.id === btn.dataset.id);
-            if (model) showOpenProjectModal(model);
+        btn.addEventListener('click', async () => {
+            const model = loadModels().find(m => m.id === btn.dataset.id);
+            if (!model) return;
+            if (isUrlModel(model)) {
+                await openPredictionScreen(model);
+            } else {
+                currentModel = model;
+                await openTrainingScreen(model);
+            }
         });
     });
 
     modelsList.querySelectorAll('[data-action="delete"]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             if (confirm('¿Eliminar este proyecto?')) {
-                deleteModel(btn.dataset.id);
+                await deleteModel(btn.dataset.id);
                 renderModels();
                 showToast('Proyecto eliminado', 'success');
             }
@@ -117,63 +173,784 @@ function renderModels() {
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
     document.getElementById(screenId).classList.remove('hidden');
+
 }
 
-function openMakeCodeForModel(model) {
+function isUrlModel(model) {
+    return !!(model?.url && !model?.localModel);
+}
+
+async function openPredictionScreen(model) {
+    currentModel = model;
+    document.getElementById('predictionModelName').textContent = model.name;
+
+    const retrainBtn = document.getElementById('predictionRetrainBtn');
+    retrainBtn.style.display = model.url ? 'none' : '';
+
+    const isAudio = model.projectType === 'audio' || model.localModel?.source === 'local-audio';
+
+    // Flip button only makes sense for camera models
+    document.getElementById('predictionFlipBtn').style.display = isAudio ? 'none' : '';
+
     stopPredictions();
+    stopPredictionLoop();
+    audioTrainer.stopListening();
+    audioTrainer.stopVisualizer();
+    closeMakeCode('makecodeInlineFrame');
+    closeCaptureWebcamSilent();
     disconnectMicrobit();
-    openMakeCode(
-        model.classNames || getClassNames(),
-        model.makecodeProject || null,
-        (proj) => {
-            updateProjectMakeCode(model.id, proj);
-            // Keep in-memory reference in sync so re-opening loads the saved project
-            if (currentModel && currentModel.id === model.id) {
-                currentModel.makecodeProject = proj;
-            }
-        },
-        model.name
-    );
-    showScreen('makecodeScreen');
-}
 
-let selectedProject = null;
+    const conn = document.getElementById('predictionConnectBtn');
+    conn.classList.remove('connected');
+    conn.textContent = '🔗 Conectar';
 
-function showOpenProjectModal(model) {
-    selectedProject = model;
-    document.getElementById('openProjectTitle').textContent = model.name;
-    document.getElementById('openProjectModal').classList.remove('hidden');
-}
+    trainingFacingMode = 'user';
+    predictionExpanded = false;
+    document.body.classList.remove('prediction-expanded');
+    document.getElementById('prediction-predictions').innerHTML = '';
 
-function hideOpenProjectModal() {
-    document.getElementById('openProjectModal').classList.add('hidden');
-    selectedProject = null;
-}
-
-async function goToExecution() {
-    closeMakeCode();
-    resetConnectionUI();
-    showScreen('processingScreen');
-    document.getElementById('modelName').textContent = currentModel.name;
+    showScreen('predictionScreen');
     showToast('Cargando modelo...', 'info');
 
     try {
-        await loadModel(currentModel.url);
-        await startPredictions();
-        showToast('Modelo cargado', 'success');
+        if (model.localModel?.source === 'local-audio') {
+            // Local audio model: load weights + start visualizer + start listening
+            await audioTrainer.loadSavedModel(model.localModel);
 
-        const modelType = getModelType();
-        const flipBtn = document.getElementById('flipCameraBtn');
-        if (modelType === 'image' || modelType === 'pose') {
-            flipBtn.classList.remove('hidden');
+            const wrapper = document.getElementById('prediction-webcam-wrapper');
+            const canvas = document.createElement('canvas');
+            canvas.width = 400;
+            canvas.height = 400;
+            canvas.style.background = '#fff';
+            wrapper.innerHTML = '';
+            wrapper.appendChild(canvas);
+            await audioTrainer.startVisualizer(canvas);
+            await audioTrainer.startListening(preds => renderTrainingPredictions(preds));
+        } else if (model.url) {
+            await loadModel(model.url);
+            configurePredictions({
+                wrapperElementId: 'prediction-webcam-wrapper',
+                containerElementId: 'prediction-predictions'
+            });
+            await startPredictions();
         } else {
-            flipBtn.classList.add('hidden');
+            await startPredictionLoop();
         }
+        showToast('Modelo cargado', 'success');
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error loading model:', error);
         showToast('Error al cargar el modelo', 'error');
         showScreen('homeScreen');
+        return;
     }
+
+    const classNamesForMakeCode = model.classNames
+        || (isAudio ? audioTrainer.getClassNames() : trainer.getClassNames());
+
+    openMakeCode(
+        classNamesForMakeCode,
+        model.makecodeProject || null,
+        (proj) => {
+            updateProjectMakeCode(model.id, proj);
+            if (currentModel) currentModel.makecodeProject = proj;
+        },
+        model.name,
+        'makecodeInlineFrame',
+        true
+    );
+}
+
+// ============================================
+// TRAINING SCREEN
+// ============================================
+
+async function openTrainingScreen(project) {
+    document.getElementById('trainingModelName').textContent = project.name;
+    document.getElementById('trainBtn').disabled = true;
+
+    stopPredictionLoop();
+    closeCaptureWebcamSilent();
+    audioTrainer.stopListening();
+    audioTrainer.stopVisualizer();
+    trainer.dispose();
+    audioTrainer.dispose();
+    document.getElementById('trainProgressText').textContent = '';
+
+    trainingFacingMode = 'user';
+    predictionExpanded = false;
+    document.body.classList.remove('prediction-expanded');
+
+    const isAudio = project.projectType === 'audio';
+
+    if (isAudio) {
+        showToast('Iniciando entrenador de audio...', 'info');
+
+        try {
+            await audioTrainer.initTrainer();
+
+            if (project.localModel) {
+                project.localModel.classNames.forEach(name => audioTrainer.addClass(name));
+                showToast('Cargando muestras anteriores...', 'info');
+                await audioTrainer.loadSamples(project.id);
+                try {
+                    await audioTrainer.loadSavedModel(project.localModel);
+                    await openPredictionScreen(project);
+                    return;
+                } catch (e) {
+                    // Model weights not found — show training screen for re-recording/re-training
+                    showScreen('trainingScreen');
+                    document.getElementById('trainingCaptureSection').classList.remove('hidden');
+                }
+            } else {
+                showScreen('trainingScreen');
+                document.getElementById('trainingCaptureSection').classList.remove('hidden');
+                audioTrainer.addClass('Ruido de fondo');
+                audioTrainer.addClass('Clase 1');
+                audioTrainer.addClass('Clase 2');
+            }
+
+            renderTrainingClasses();
+            await openAudioVisualizer();
+            showToast('Listo', 'success');
+        } catch (error) {
+            console.error('Audio training init error:', error);
+            showToast('Error al inicializar micrófono', 'error');
+            showScreen('homeScreen');
+        }
+
+        return;
+    }
+
+    // ── Image trainer flow ──
+    if (!project.localModel) {
+        document.getElementById('trainingCaptureSection').classList.remove('hidden');
+    }
+
+    showToast('Cargando red base...', 'info');
+
+    try {
+        await trainer.initTrainer();
+
+        if (project.localModel) {
+            try {
+                await trainer.loadSavedModel(project.localModel);
+            } catch (e) {
+                showScreen('trainingScreen');
+                document.getElementById('trainingCaptureSection').classList.remove('hidden');
+                project.localModel.classNames.forEach(name => trainer.addClass(name));
+                renderTrainingClasses();
+                openCaptureWebcam();
+                showToast('Listo', 'success');
+                return;
+            }
+            showToast('Cargando muestras anteriores...', 'info');
+            await trainer.loadSamples(project.id);
+            if (trainer.isTrained()) {
+                await openPredictionScreen(project);
+                return;
+            }
+            showScreen('trainingScreen');
+            document.getElementById('trainingCaptureSection').classList.remove('hidden');
+        } else {
+            showScreen('trainingScreen');
+            trainer.addClass('Clase 1');
+            trainer.addClass('Clase 2');
+        }
+
+        renderTrainingClasses();
+        openCaptureWebcam();
+        showToast('Listo', 'success');
+    } catch (error) {
+        console.error('Training init error:', error);
+        showToast('Error al inicializar', 'error');
+        showScreen('homeScreen');
+    }
+}
+
+// ============================================
+// WEBCAM MANAGEMENT
+// ============================================
+
+async function openCaptureWebcam() {
+    if (activeWebcamTarget === 'capture') closeCaptureWebcamSilent();
+    stopPredictionLoop();
+
+    activeWebcamTarget = 'capture';
+
+    const webcam = new window.tmImage.Webcam(400, 400, true);
+    await webcam.setup();
+
+    // Abortar si el modo cambió durante el setup
+    if (activeWebcamTarget !== 'capture') {
+        webcam.stop();
+        return;
+    }
+
+    await webcam.play();
+    activeWebcam = webcam;
+
+    const container = document.getElementById('captureWebcamContainer');
+    if (container) {
+        container.innerHTML = '';
+        container.appendChild(activeWebcam.canvas);
+    }
+
+    function updateLoop() {
+        if (activeWebcamTarget !== 'capture') return;
+        if (activeWebcam) activeWebcam.update();
+        requestAnimationFrame(updateLoop);
+    }
+    requestAnimationFrame(updateLoop);
+}
+
+async function openAudioVisualizer() {
+    const container = document.getElementById('captureWebcamContainer');
+    container.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 300;
+    canvas.style.cssText = 'width:100%;height:100%;display:block;border-radius:12px;';
+    container.appendChild(canvas);
+    await audioTrainer.startVisualizer(canvas);
+}
+
+function closeCaptureWebcamSilent() {
+    trainer.stopCapture();
+    if (activeWebcam && activeWebcamTarget === 'capture') {
+        activeWebcam.stop();
+        activeWebcam = null;
+    }
+    const container = document.getElementById('captureWebcamContainer');
+    if (container) container.innerHTML = '';
+    activeWebcam = null;
+    activeWebcamTarget = null;
+}
+
+async function startPredictionLoop() {
+    if (activeWebcamTarget === 'capture') return;
+    stopPredictionLoop(); // destruir webcam previa si la hay
+
+    const wrapper = document.getElementById('prediction-webcam-wrapper');
+    activeWebcam = new window.tmImage.Webcam(400, 400, trainingFacingMode === 'user');
+    await activeWebcam.setup();
+    if (trainingFacingMode === 'environment') {
+        await applyEnvironmentCamera(activeWebcam);
+    }
+    await activeWebcam.play();
+
+    wrapper.innerHTML = '';
+    wrapper.appendChild(activeWebcam.canvas);
+
+    activeWebcamTarget = 'prediction';
+    predictionLoopRunning = true;
+
+    updateTrainButton();
+
+    let inFlight = false;
+    function loop() {
+        if (!predictionLoopRunning || activeWebcamTarget !== 'prediction') return;
+        if (!activeWebcam) return;
+        activeWebcam.update();
+        if (!inFlight) {
+            inFlight = true;
+            trainer.predict(activeWebcam.canvas)
+                .then(preds => {
+                    inFlight = false;
+                    renderTrainingPredictions(preds);
+                })
+                .catch(() => { inFlight = false; });
+        }
+        requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+}
+
+function stopPredictionLoop() {
+    predictionLoopRunning = false;
+    if (activeWebcam && activeWebcamTarget === 'prediction') {
+        activeWebcam.stop();
+        activeWebcam = null;
+        activeWebcamTarget = null;
+        document.getElementById('prediction-webcam-wrapper').innerHTML = '';
+    }
+    updateTrainButton();
+}
+
+async function flipTrainingCamera() {
+    trainingFacingMode = trainingFacingMode === 'user' ? 'environment' : 'user';
+    stopPredictionLoop();
+    await new Promise(r => setTimeout(r, 250)); // wait for camera hardware to release
+    await startPredictionLoop();
+}
+
+function togglePredictionExpanded() {
+    predictionExpanded = !predictionExpanded;
+    document.body.classList.toggle('prediction-expanded', predictionExpanded);
+    if (predictionExpanded) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(sizeExpandedVideo);
+        });
+    } else {
+        clearExpandedVideoSize();
+    }
+}
+
+function sizeExpandedVideo() {
+    if (!predictionExpanded) return;
+
+    const area = document.querySelector('.prediction-video-area');
+    const wrapper = document.querySelector('.prediction-webcam-wrapper');
+    const column = document.querySelector('.prediction-main-column');
+    if (!area || !wrapper) return;
+    const r = area.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const padW = parseFloat(getComputedStyle(area).paddingLeft)
+               + parseFloat(getComputedStyle(area).paddingRight);
+    const padH = parseFloat(getComputedStyle(area).paddingTop)
+               + parseFloat(getComputedStyle(area).paddingBottom);
+    const size = Math.floor(Math.min(r.width - padW, r.height - padH));
+    if (size > 0) {
+        wrapper.style.width = size + 'px';
+        wrapper.style.height = size + 'px';
+        if (column) column.style.setProperty('--expanded-video-size', size + 'px');
+    }
+}
+
+function clearExpandedVideoSize() {
+    const wrapper = document.querySelector('.prediction-webcam-wrapper');
+    if (wrapper) { wrapper.style.width = ''; wrapper.style.height = ''; }
+    const column = document.querySelector('.prediction-main-column');
+    if (column) column.style.removeProperty('--expanded-video-size');
+}
+
+window.addEventListener('resize', () => {
+    if (predictionExpanded) sizeExpandedVideo();
+});
+
+document.addEventListener('click', () => {
+    document.querySelectorAll('.class-dropdown.open').forEach(d => d.classList.remove('open'));
+});
+
+async function enterCaptureMode() {
+    trainingFacingMode = 'user';
+    predictionExpanded = false;
+    document.body.classList.remove('prediction-expanded');
+
+    stopPredictionLoop();
+    stopPredictions();
+    closeMakeCode('makecodeInlineFrame');
+
+    const isAudio = currentModel?.projectType === 'audio';
+
+    if (isAudio) {
+        audioTrainer.stopListening();
+        audioTrainer.stopVisualizer();
+
+        // Restore samples from IDB if counts are all 0
+        const classes = audioTrainer.getClasses();
+        const needLoad = classes.length > 0 && classes.every(c => c.count === 0);
+        if (needLoad) await audioTrainer.loadSamples(currentModel.id);
+
+        document.getElementById('trainingCaptureSection').classList.remove('hidden');
+        renderTrainingClasses();
+        showScreen('trainingScreen');
+        await openAudioVisualizer();
+    } else {
+        // Restaurar muestras desde IDB si no hay samples en memoria
+        const classes = trainer.getClasses();
+        const needLoad = classes.length > 0 && classes.every(c => c.count === 0);
+        if (needLoad) await trainer.loadSamples(currentModel.id);
+        renderTrainingClasses();
+
+        showScreen('trainingScreen');
+        openCaptureWebcam();
+    }
+}
+
+function renderTrainingPredictions(predictions) {
+    const container = document.getElementById('prediction-predictions');
+    if (!container || !predictions?.length) return;
+
+    const sorted = predictions.slice().sort((a, b) => b.probability - a.probability);
+
+    container.innerHTML = sorted.map((pred, i) => {
+        const pct = (pred.probability * 100).toFixed(1);
+        return `
+            <div class="prediction-item ${i === 0 ? 'top' : ''}">
+                <div class="prediction-header">
+                    <span class="class-name">${escapeHtml(pred.className)}</span>
+                    <span class="confidence">${pct}%</span>
+                </div>
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: ${pct}%"></div>
+                </div>
+            </div>`;
+    }).join('');
+
+    if (isConnected() && sorted.length > 0) {
+        const top = sorted[0];
+        sendToMicrobit(top.className, top.probability * 100);
+    }
+}
+
+function updateClassUI(classIndex) {
+    const card = document.querySelector(`#trainingClassesList [data-index="${classIndex}"]`);
+    if (!card) return;
+    const c = trainer.getClasses()[classIndex];
+
+    const badge = card.querySelector('.sample-badge');
+    if (badge) badge.textContent = `${c.count} muestras`;
+
+    const gallery = card.querySelector('.sample-gallery');
+    if (gallery) {
+        const samples = trainer.getSamples(classIndex);
+        gallery.innerHTML = samples.map(s => `
+            <div class="sample-thumb">
+                <img src="${s.thumb}">
+                <button class="btn-delete-sample" data-ci="${classIndex}" data-si="${s.index}">×</button>
+            </div>
+        `).join('');
+        gallery.querySelectorAll('.btn-delete-sample').forEach(btn => {
+            btn.addEventListener('click', () => {
+                trainer.deleteSample(+btn.dataset.ci, +btn.dataset.si);
+                updateClassUI(classIndex);
+                updateTrainButton();
+            });
+        });
+    }
+
+    updateTrainButton();
+}
+
+function renderTrainingClasses() {
+    if (currentModel?.projectType === 'audio') {
+        renderAudioTrainingClasses();
+        return;
+    }
+
+    const container = document.getElementById('trainingClassesList');
+    const cls = trainer.getClasses();
+
+    container.innerHTML = cls.map((c, i) => {
+        const color = getClassColor(i);
+        const samples = trainer.getSamples(i);
+        const pct = Math.min(100, (c.count / 20) * 100);
+
+        return `
+        <div class="training-class-card" data-index="${i}">
+            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
+                <div class="class-card-header-left">
+                    <div class="class-dot" style="background:${color.dot};"></div>
+                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}" style="color:${color.headerText};">
+                </div>
+                <div class="class-card-header-right">
+                    <span class="sample-badge" data-index="${i}" style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
+                    <div class="class-menu-wrapper">
+                        <button class="btn-class-menu" data-index="${i}" title="Opciones">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
+                                <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+                            </svg>
+                        </button>
+                        <div class="class-dropdown">
+                            <button class="class-dropdown-item btn-clear-class" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+                                </svg>
+                                Borrar muestras
+                            </button>
+                            <button class="class-dropdown-item btn-delete-class danger" data-index="${i}">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
+                                </svg>
+                                Eliminar clase
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="class-card-body">
+                <div class="class-capture-buttons">
+                    <button class="btn-capture-one" data-index="${i}" style="background:${color.bg}; color:${color.headerText}; border-color:${color.badge};">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
+                        Tomar
+                    </button>
+                    <button class="btn-capture-hold" data-index="${i}" style="background:${color.btnFill};">
+                        <span class="hold-dot"></span>
+                        Mantener
+                    </button>
+                </div>
+                <div class="sample-gallery">
+                    ${samples.map(s => `
+                        <div class="sample-thumb">
+                            <img src="${s.thumb}">
+                            <button class="btn-delete-sample" data-ci="${i}" data-si="${s.index}">×</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    container.querySelectorAll('.class-name-input').forEach(input => {
+        input.addEventListener('change', () => {
+            trainer.renameClass(+input.dataset.index, input.value.trim());
+        });
+    });
+
+    container.querySelectorAll('.btn-class-menu').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropdown = btn.closest('.class-menu-wrapper').querySelector('.class-dropdown');
+            document.querySelectorAll('.class-dropdown.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
+        });
+    });
+
+    container.querySelectorAll('.btn-clear-class').forEach(btn => {
+        btn.addEventListener('click', () => {
+            trainer.clearSamples(+btn.dataset.index);
+            renderTrainingClasses();
+            updateTrainButton();
+        });
+    });
+
+    container.querySelectorAll('.btn-delete-class').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (trainer.getTotalClasses() <= 2) {
+                showToast('Mínimo 2 clases', 'error');
+                return;
+            }
+            trainer.removeClass(+btn.dataset.index);
+            renderTrainingClasses();
+        });
+    });
+
+    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const ci = +btn.dataset.ci;
+            trainer.deleteSample(ci, +btn.dataset.si);
+            updateClassUI(ci);
+        });
+    });
+
+    container.querySelectorAll('.btn-capture-one').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+            trainer.captureOne(+btn.dataset.index, activeWebcam.canvas);
+            updateClassUI(+btn.dataset.index);
+        });
+    });
+
+    container.querySelectorAll('.btn-capture-hold').forEach(btn => {
+        const ci = +btn.dataset.index;
+        const startHold = () => {
+            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+            btn.classList.add('capturing');
+            trainer.startCapture(ci, activeWebcam.canvas);
+            btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
+        };
+        const stopHold = () => {
+            btn.classList.remove('capturing');
+            trainer.stopCapture();
+            clearInterval(btn._updateInterval);
+            updateClassUI(ci);
+        };
+
+        btn.addEventListener('mousedown', startHold);
+        btn.addEventListener('mouseup', stopHold);
+        btn.addEventListener('mouseleave', stopHold);
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); });
+        btn.addEventListener('touchend', stopHold);
+    });
+
+    updateTrainButton();
+}
+
+function renderAudioTrainingClasses() {
+    const container = document.getElementById('trainingClassesList');
+    const cls = audioTrainer.getClasses();
+
+    container.innerHTML = cls.map((c, i) => {
+        const color = getClassColor(i);
+        const isBackground = i === 0; // "Ruido de fondo" is always index 0
+        const pct = Math.min(100, (c.count / 20) * 100);
+
+        return `
+        <div class="training-class-card" data-index="${i}">
+            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
+                <div class="class-card-header-left">
+                    <div class="class-dot" style="background:${color.dot};"></div>
+                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}"
+                        style="color:${color.headerText};" ${isBackground ? 'disabled' : ''}>
+                </div>
+                <div class="class-card-header-right">
+                    <span class="sample-badge" data-index="${i}"
+                        style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
+                    ${isBackground ? '' : `
+                    <div class="class-menu-wrapper">
+                        <button class="btn-class-menu" data-index="${i}" title="Opciones">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
+                                <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+                            </svg>
+                        </button>
+                        <div class="class-dropdown">
+                            <button class="class-dropdown-item btn-audio-clear" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+                                </svg>
+                                Borrar muestras
+                            </button>
+                            <button class="class-dropdown-item btn-audio-delete danger" data-index="${i}">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
+                                </svg>
+                                Eliminar clase
+                            </button>
+                        </div>
+                    </div>`}
+                </div>
+            </div>
+            <div class="class-card-body">
+                <div class="audio-sample-info">
+                    <div class="audio-sample-bar-wrap">
+                        <div class="audio-sample-bar-fill" style="width:${pct}%"></div>
+                    </div>
+                </div>
+                <div class="class-capture-buttons">
+                    <button class="btn-audio-record" data-index="${i}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                        Grabar
+                    </button>
+                    <button class="btn-audio-record-hold" data-index="${i}">
+                        <span class="hold-dot"></span>
+                        Mantener
+                    </button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // ── Rename ──
+    container.querySelectorAll('.class-name-input:not([disabled])').forEach(input => {
+        input.addEventListener('change', () => {
+            const newName = input.value.trim();
+            if (!newName) { input.value = audioTrainer.getClasses()[+input.dataset.index].name; return; }
+            try {
+                audioTrainer.renameClass(+input.dataset.index, newName);
+            } catch (e) {
+                showToast(e.message, 'error');
+                input.value = audioTrainer.getClasses()[+input.dataset.index].name;
+            }
+        });
+    });
+
+    // ── Dropdown open/close ──
+    container.querySelectorAll('.btn-class-menu').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropdown = btn.closest('.class-menu-wrapper').querySelector('.class-dropdown');
+            document.querySelectorAll('.class-dropdown.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
+        });
+    });
+
+    // ── Clear samples (clears ALL due to speech-commands API limitation) ──
+    container.querySelectorAll('.btn-audio-clear').forEach(btn => {
+        btn.addEventListener('click', () => {
+            audioTrainer.clearSamples(+btn.dataset.index);
+            renderTrainingClasses();
+            updateTrainButton();
+            showToast('Muestras borradas', 'success');
+        });
+    });
+
+    // ── Delete class ──
+    container.querySelectorAll('.btn-audio-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (audioTrainer.getTotalClasses() <= 2) {
+                showToast('Mínimo 2 clases', 'error');
+                return;
+            }
+            audioTrainer.removeClass(+btn.dataset.index);
+            renderTrainingClasses();
+        });
+    });
+
+    // ── Single record (~1 second) ──
+    container.querySelectorAll('.btn-audio-record').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (audioTrainer.getIsRecording()) return;
+            const ci = +btn.dataset.index;
+            btn.classList.add('recording');
+            btn.querySelector('svg').style.display = 'none';
+            btn.childNodes[btn.childNodes.length - 1].textContent = ' Grabando...';
+            try {
+                await audioTrainer.recordSample(ci);
+            } catch (e) {
+                console.error('Recording error:', e);
+            }
+            btn.classList.remove('recording');
+            btn.querySelector('svg').style.display = '';
+            btn.childNodes[btn.childNodes.length - 1].textContent = ' Grabar';
+            updateClassUIAudio(ci);
+            updateTrainButton();
+        });
+    });
+
+    // ── Continuous record (hold) ──
+    container.querySelectorAll('.btn-audio-record-hold').forEach(btn => {
+        const ci = +btn.dataset.index;
+
+        const startHold = () => {
+            btn.classList.add('capturing');
+            audioTrainer.startContinuousRecording(ci);
+            btn._updateInterval = setInterval(() => {
+                updateClassUIAudio(ci);
+                updateTrainButton();
+            }, 500);
+        };
+
+        const stopHold = () => {
+            btn.classList.remove('capturing');
+            audioTrainer.stopContinuousRecording();
+            clearInterval(btn._updateInterval);
+            updateClassUIAudio(ci);
+            updateTrainButton();
+        };
+
+        btn.addEventListener('mousedown', startHold);
+        btn.addEventListener('mouseup', stopHold);
+        btn.addEventListener('mouseleave', stopHold);
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); });
+        btn.addEventListener('touchend', stopHold);
+    });
+
+    updateTrainButton();
+}
+
+function updateClassUIAudio(classIndex) {
+    const card = document.querySelector(`#trainingClassesList [data-index="${classIndex}"]`);
+    if (!card) return;
+    const c = audioTrainer.getClasses()[classIndex];
+    if (!c) return;
+
+    const badge = card.querySelector('.sample-badge');
+    if (badge) badge.textContent = `${c.count} muestras`;
+
+    const fill = card.querySelector('.audio-sample-bar-fill');
+    if (fill) fill.style.width = Math.min(100, (c.count / 20) * 100) + '%';
+}
+
+function updateTrainButton() {
+    const isAudio = currentModel?.projectType === 'audio';
+    const t = getTrainer();
+    const cls = t.getClasses();
+    const ready = cls.length >= 2 && cls.every(c => c.count >= 8);
+    document.getElementById('trainBtn').disabled = !ready || (!isAudio && predictionLoopRunning);
 }
 
 // ============================================
@@ -211,9 +988,8 @@ async function saveNewModel() {
     try {
         const classNames = await extractClassNames(url);
         const model = addProject(name, url, classNames);
-        currentModel = model;
         renderModels();
-        openMakeCodeForModel(model);
+        await openPredictionScreen(model);
     } catch (error) {
         console.error('Error extracting classes:', error);
         showToast('Error al leer el modelo', 'error');
@@ -257,10 +1033,65 @@ function showToast(message, type = 'info') {
 // EVENT LISTENERS
 // ============================================
 
-// Home
-document.getElementById('newModelBtn').addEventListener('click', showNewModelModal);
+// Home: open type selection modal
+document.getElementById('newModelBtn').addEventListener('click', () => {
+    document.getElementById('projectTypeModal').classList.remove('hidden');
+});
 
-// Modal
+// Project type modal
+document.getElementById('closeTypeModalBtn').addEventListener('click', () => {
+    document.getElementById('projectTypeModal').classList.add('hidden');
+});
+
+document.getElementById('typeUrlBtn').addEventListener('click', () => {
+    document.getElementById('projectTypeModal').classList.add('hidden');
+    showNewModelModal();
+});
+
+document.getElementById('typeTrainBtn').addEventListener('click', () => {
+    pendingProjectType = 'image';
+    document.getElementById('projectTypeModal').classList.add('hidden');
+    document.getElementById('trainNameModal').classList.remove('hidden');
+    document.getElementById('trainProjectName').value = '';
+    document.getElementById('trainProjectName').focus();
+});
+
+document.getElementById('typeAudioTrainBtn').addEventListener('click', () => {
+    pendingProjectType = 'audio';
+    document.getElementById('projectTypeModal').classList.add('hidden');
+    document.getElementById('trainNameModal').classList.remove('hidden');
+    document.getElementById('trainProjectName').value = '';
+    document.getElementById('trainProjectName').focus();
+});
+
+// Train name modal
+document.getElementById('closeTrainNameBtn').addEventListener('click', () => {
+    document.getElementById('trainNameModal').classList.add('hidden');
+});
+
+document.getElementById('cancelTrainNameBtn').addEventListener('click', () => {
+    document.getElementById('trainNameModal').classList.add('hidden');
+});
+
+document.getElementById('startTrainingBtn').addEventListener('click', async () => {
+    const name = document.getElementById('trainProjectName').value.trim();
+    if (!name) {
+        showToast('Ingresa un nombre', 'error');
+        return;
+    }
+
+    document.getElementById('trainNameModal').classList.add('hidden');
+
+    currentModel = addProject(name, null, null, pendingProjectType);
+    renderModels();
+    await openTrainingScreen(currentModel);
+});
+
+document.getElementById('trainProjectName').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') document.getElementById('startTrainingBtn').click();
+});
+
+// URL modal
 document.getElementById('closeModalBtn').addEventListener('click', hideModal);
 document.getElementById('cancelModalBtn').addEventListener('click', hideModal);
 document.getElementById('saveModelBtn').addEventListener('click', saveNewModel);
@@ -268,73 +1099,116 @@ document.getElementById('modelUrlInput').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') saveNewModel();
 });
 
-// Open project modal
-document.getElementById('closeOpenProjectBtn').addEventListener('click', hideOpenProjectModal);
-
-document.getElementById('editCodeBtn').addEventListener('click', () => {
-    const model = selectedProject;
-    hideOpenProjectModal();
-    currentModel = model;
-    openMakeCodeForModel(model);
-});
-
-document.getElementById('runProjectBtn').addEventListener('click', () => {
-    const model = selectedProject;
-    hideOpenProjectModal();
-    currentModel = model;
-    goToExecution();
-});
-
-// MakeCode screen
-document.getElementById('runModelBtn').addEventListener('click', () => {
-    goToExecution();
-});
-
-document.getElementById('homeFromMakecodeBtn').addEventListener('click', () => {
-    closeMakeCode();
-    showScreen('homeScreen');
-});
-
-// Processing screen
-document.getElementById('backBtn').addEventListener('click', () => {
-    stopPredictions();
+// Training screen
+document.getElementById('trainingBackBtn').addEventListener('click', () => {
+    closeCaptureWebcamSilent();
+    audioTrainer.stopListening();
+    audioTrainer.stopVisualizer();
     disconnectMicrobit();
-
-    document.getElementById('webcam-wrapper').innerHTML = '';
-    document.getElementById('predictions').innerHTML = '';
-    document.getElementById('flipCameraBtn').classList.add('hidden');
-
+    trainer.dispose();
+    audioTrainer.dispose();
+    document.getElementById('trainingClassesList').innerHTML = '';
+    trainingFacingMode = 'user';
+    renderModels();
     showScreen('homeScreen');
 });
 
-document.getElementById('flipCameraBtn').addEventListener('click', async () => {
-    const success = await flipCamera();
-    if (!success) showToast('No hay cámara trasera disponible', 'error');
+// Prediction screen
+document.getElementById('predictionBackBtn').addEventListener('click', () => {
+    stopPredictions();
+    stopPredictionLoop();
+    audioTrainer.stopListening();
+    audioTrainer.stopVisualizer();
+    closeMakeCode('makecodeInlineFrame');
+    disconnectMicrobit();
+    predictionExpanded = false;
+    document.body.classList.remove('prediction-expanded');
+    renderModels();
+    showScreen('homeScreen');
 });
 
-document.getElementById('connectBtn').addEventListener('click', async () => {
-    document.getElementById('connectionBadge').textContent = 'Conectando...';
-    document.getElementById('connectionBadge').className = 'badge badge-connecting';
+document.getElementById('predictionRetrainBtn').addEventListener('click', async () => {
+    await enterCaptureMode();
+});
+
+document.getElementById('predictionFlipBtn').addEventListener('click', () => flipTrainingCamera());
+document.getElementById('predictionExpandBtn').addEventListener('click', togglePredictionExpanded);
+
+document.getElementById('addClassBtn').addEventListener('click', () => {
+    const t = getTrainer();
+    t.addClass(`Clase ${t.getTotalClasses() + 1}`);
+    renderTrainingClasses();
+});
+
+document.getElementById('trainBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('trainBtn');
+    const text = document.getElementById('trainProgressText');
+    const isAudio = currentModel?.projectType === 'audio';
+    const t = getTrainer();
+
+    if (isAudio) {
+        audioTrainer.stopListening();
+    } else {
+        closeCaptureWebcamSilent();
+    }
+
+    btn.disabled = true;
+    btn.querySelector('.train-label').textContent = 'Entrenando...';
+    btn.classList.add('training');
+    text.textContent = '0%';
 
     try {
-        await connectMicrobit();
-        document.getElementById('connectBtn').style.display = 'none';
-        document.getElementById('disconnectBtn').style.display = 'block';
-        document.getElementById('connectionBadge').textContent = 'Conectado';
-        document.getElementById('connectionBadge').className = 'badge badge-connected';
+        await t.saveSamples(currentModel.id);
+        await t.train((epoch, total) => {
+            const pct = ((epoch + 1) / total * 100);
+            text.textContent = `${Math.round(pct)}%`;
+        });
+
+        showToast('Modelo entrenado', 'success');
+
+        const localModelInfo = await t.saveModel(currentModel.id);
+        const models = loadModels();
+        const project = models.find(m => m.id === currentModel.id);
+        if (project) {
+            project.localModel = localModelInfo;
+            project.classNames = localModelInfo.classNames;
+            saveModels(models);
+            currentModel = project;
+        }
+        renderModels();
+
+        await openPredictionScreen(currentModel);
+
     } catch (error) {
-        document.getElementById('connectionBadge').textContent = 'Desconectado';
-        document.getElementById('connectionBadge').className = 'badge badge-disconnected';
-        showToast('Error al conectar', 'error');
+        console.error('Training error:', error);
+        showToast(error.message, 'error');
+
+        // If audio training failed but model was previously trained, resume listening
+        if (isAudio && audioTrainer.isTrained()) {
+            await audioTrainer.startListening(preds => renderTrainingPredictions(preds));
+        }
     }
+
+    btn.querySelector('.train-label').textContent = 'Entrenar';
+    btn.classList.remove('training');
+    btn.disabled = false;
 });
 
-document.getElementById('disconnectBtn').addEventListener('click', () => {
-    disconnectMicrobit();
-});
 
-document.getElementById('openMakecodeBtn').addEventListener('click', () => {
-    openMakeCodeForModel(currentModel);
+// Prediction screen — bluetooth toggle
+document.getElementById('predictionConnectBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('predictionConnectBtn');
+    if (isConnected()) {
+        disconnectMicrobit();
+    } else {
+        try {
+            await connectMicrobit();
+            btn.classList.add('connected');
+            btn.textContent = '❌ Desconectar';
+        } catch (error) {
+            showToast('Error al conectar', 'error');
+        }
+    }
 });
 
 // ============================================
@@ -348,8 +1222,8 @@ document.addEventListener('touchstart', (e) => {
 }, { passive: false });
 
 document.addEventListener('touchmove', (e) => {
-    const processingScreen = document.getElementById('processingScreen');
-    if (!processingScreen.classList.contains('hidden')) {
+    const predictionScreen = document.getElementById('predictionScreen');
+    if (!predictionScreen.classList.contains('hidden')) {
         const touchDelta = e.touches[0].clientY - touchStartY;
         if (touchDelta > 0 && window.scrollY === 0) e.preventDefault();
     }
