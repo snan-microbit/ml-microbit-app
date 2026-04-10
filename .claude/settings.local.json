@@ -5,7 +5,14 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:makecode.microbit.org)",
       "WebFetch(domain:makecode.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(> vendor/CHECKSUMS.txt)",
+      "Bash(curl -fL --progress-bar -o vendor/tfjs/tfjs-4.22.0.min.js \"https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js\")",
+      "Bash(sha256sum vendor/tfjs/tfjs-4.22.0.min.js)",
+      "Bash(curl -fL --progress-bar -o vendor/speech-commands/speech-commands-0.5.4.min.js \"https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js\")",
+      "Bash(sha256sum vendor/speech-commands/speech-commands-0.5.4.min.js)",
+      "Bash(curl -fL --progress-bar -o vendor/mediapipe/tasks-vision-0.10.14.mjs \"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs\")",
+      "Bash(sha256sum vendor/mediapipe/tasks-vision-0.10.14.mjs)"
     ]
   }
 }

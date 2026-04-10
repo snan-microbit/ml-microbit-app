@@ -18,9 +18,7 @@ let classes = []; // [{name, samples: [{tensor: Tensor1D, thumb: string}], count
 let captureIntervalId = null;
 let captureCanvas = null; // 224x224 canvas for normalizing input
 
-const MOBILENET_URL =
-    "https://storage.googleapis.com/tfjs-models/tfjs/" +
-    "mobilenet_v1_0.25_224/model.json";
+const MOBILENET_URL = "vendor/mobilenet/v1-0.25-224/model.json";
 
 const TRUNCATION_LAYER = "conv_pw_13_relu";
 

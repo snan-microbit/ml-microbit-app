@@ -9,8 +9,16 @@
 
 const MAKECODE_URL = "https://makecode.microbit.org";
 
+const MAKECODE_LOAD_TIMEOUT_MS = 8000;
+
 // Map of iframeId → registered message handler
 const messageHandlers = {};
+
+// Map of iframeId → pending load timeout id
+const pendingTimeouts = {};
+
+// Map of iframeId → last openMakeCode params (for retry)
+const lastCallParams = {};
 
 function generateTmClassesTs(classNames) {
     const enumMembers = classNames.map((name, i) => {
@@ -53,16 +61,29 @@ function generateProject(classNames, projectName) {
  * @param {function|null} onSave    - Callback called with the project each time MakeCode saves
  * @param {string} [projectName]    - Project name for fresh projects
  * @param {string} [iframeId]       - ID of the iframe element (default: 'makecodeFrame')
+ * @param {boolean} [hideSimulator] - Whether to hide the simulator panel
  */
 function openMakeCode(classNames, savedProject, onSave, projectName, iframeId = 'makecodeFrame', hideSimulator = false) {
     const iframe = document.getElementById(iframeId);
     if (!iframe) return;
+
+    // Cache params for retry
+    lastCallParams[iframeId] = { classNames, savedProject, onSave, projectName, iframeId, hideSimulator };
 
     // Remove any existing handler for this iframe
     if (messageHandlers[iframeId]) {
         window.removeEventListener('message', messageHandlers[iframeId]);
         delete messageHandlers[iframeId];
     }
+
+    // Clear any pending timeout from a previous load attempt
+    if (pendingTimeouts[iframeId]) {
+        clearTimeout(pendingTimeouts[iframeId]);
+        delete pendingTimeouts[iframeId];
+    }
+
+    // Hide any visible fallback overlay from a previous failure
+    hideFallbackOverlay(iframeId);
 
     const handler = (event) => {
         if (event.source !== iframe.contentWindow) return;
@@ -71,6 +92,13 @@ function openMakeCode(classNames, savedProject, onSave, projectName, iframeId = 
         if (!data || !data.type) return;
 
         if (data.action === 'workspacesync') {
+            // First valid message from MakeCode — it loaded successfully.
+            // Cancel the pending timeout.
+            if (pendingTimeouts[iframeId]) {
+                clearTimeout(pendingTimeouts[iframeId]);
+                delete pendingTimeouts[iframeId];
+            }
+
             let project;
             if (savedProject) {
                 // Deep copy to avoid mutating caller's object
@@ -102,11 +130,26 @@ function openMakeCode(classNames, savedProject, onSave, projectName, iframeId = 
 
     messageHandlers[iframeId] = handler;
     window.addEventListener('message', handler);
+
+    // If we're already offline, show fallback immediately without trying.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        showFallbackOverlay(iframeId);
+        return;
+    }
+
+    // Set timeout: if no workspacesync arrives within MAKECODE_LOAD_TIMEOUT_MS,
+    // assume MakeCode failed to load and show fallback.
+    pendingTimeouts[iframeId] = setTimeout(() => {
+        delete pendingTimeouts[iframeId];
+        showFallbackOverlay(iframeId);
+    }, MAKECODE_LOAD_TIMEOUT_MS);
+
     iframe.src = MAKECODE_URL + '?controller=1';
 }
 
 /**
- * Closes MakeCode: clears the iframe src and removes the message listener.
+ * Closes MakeCode: clears the iframe src, removes the message listener,
+ * cancels any pending timeout, and hides the fallback overlay.
  * @param {string} [iframeId] - ID of the iframe element (default: 'makecodeFrame')
  */
 function closeMakeCode(iframeId = 'makecodeFrame') {
@@ -114,8 +157,72 @@ function closeMakeCode(iframeId = 'makecodeFrame') {
         window.removeEventListener('message', messageHandlers[iframeId]);
         delete messageHandlers[iframeId];
     }
+    if (pendingTimeouts[iframeId]) {
+        clearTimeout(pendingTimeouts[iframeId]);
+        delete pendingTimeouts[iframeId];
+    }
+    hideFallbackOverlay(iframeId);
+    delete lastCallParams[iframeId];
     const iframe = document.getElementById(iframeId);
     if (iframe) iframe.src = 'about:blank';
 }
 
-export { openMakeCode, closeMakeCode };
+function retryMakeCode(iframeId) {
+    const params = lastCallParams[iframeId];
+    if (!params) return;
+    // openMakeCode will hide the overlay, clear timeouts, and start a fresh attempt.
+    openMakeCode(
+        params.classNames,
+        params.savedProject,
+        params.onSave,
+        params.projectName,
+        params.iframeId,
+        params.hideSimulator
+    );
+}
+
+function showFallbackOverlay(iframeId) {
+    const iframe = document.getElementById(iframeId);
+    if (!iframe) return;
+
+    // Avoid duplicates
+    const existing = document.getElementById('makecodeFallback-' + iframeId);
+    if (existing) {
+        existing.style.display = 'flex';
+        return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'makecodeFallback-' + iframeId;
+    overlay.className = 'makecode-fallback-overlay';
+    overlay.innerHTML = `
+        <div class="makecode-fallback-card">
+            <h3>No se pudo cargar MakeCode</h3>
+            <p>Necesitás conexión a internet para programar con bloques.<br>
+            El resto de la app funciona normalmente.</p>
+            <button type="button" class="btn-primary makecode-fallback-retry">
+                Reintentar conexión
+            </button>
+        </div>
+    `;
+
+    // Position the overlay over the iframe
+    const parent = iframe.parentElement;
+    if (parent && getComputedStyle(parent).position === 'static') {
+        parent.style.position = 'relative';
+    }
+    (parent || document.body).appendChild(overlay);
+
+    overlay.querySelector('.makecode-fallback-retry').addEventListener('click', () => {
+        retryMakeCode(iframeId);
+    });
+}
+
+function hideFallbackOverlay(iframeId) {
+    const overlay = document.getElementById('makecodeFallback-' + iframeId);
+    if (overlay && overlay.parentElement) {
+        overlay.parentElement.removeChild(overlay);
+    }
+}
+
+export { openMakeCode, closeMakeCode, retryMakeCode };

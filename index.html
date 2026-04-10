@@ -15,18 +15,20 @@
     <link rel="apple-touch-icon" href="assets/icon-192.png">
     <link rel="manifest" href="manifest.json">
 
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css?v=3.0">
 
-    <link rel="stylesheet" href="css/styles.css?v=2.5">
-
-    <!-- TF.js 1.3.1: required by @teachablemachine/pose (fromPixels removed in 2.0+) -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.3/dist/teachablemachine-image.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js"></script>
+    <!-- TF.js 4.22.0 (self-hosted) -->
+<script src="vendor/tfjs/tfjs-4.22.0.min.js"></script>
+<!-- Speech Commands 0.5.4 (self-hosted) -->
+<script src="vendor/speech-commands/speech-commands-0.5.4.min.js"></script>
+<!-- MediaPipe Tasks Vision 0.10.14 (self-hosted) -->
+<script type="module">
+import { FilesetResolver, PoseLandmarker, DrawingUtils } from "./vendor/mediapipe/tasks-vision-0.10.14.mjs";
+window.FilesetResolver = FilesetResolver;
+window.PoseLandmarker = PoseLandmarker;
+window.DrawingUtils = DrawingUtils;
+console.log('✅ MediaPipe loaded (self-hosted)');
+</script>
 </head>
 <body>
     <!-- HOME SCREEN -->
@@ -40,7 +42,7 @@
                 <p class="subtitle">Conecta modelos de Machine Learning con tu micro:bit</p>
             </header>
 
-            <button class="btn-primary btn-large" id="newModelBtn">
+            <button class="btn-primary btn-large" id="newModelBtn" style="display:none">
                 + Nuevo Proyecto
             </button>
 
@@ -156,13 +158,13 @@
             </div>
             <div class="modal-body">
                 <div class="project-type-options">
-                    <button class="btn-project-type" id="typeUrlBtn">
+                    <button class="btn-project-type" id="typeUrlBtn" style="display:none">
                         <span class="type-icon">🔗</span>
                         <span class="type-label">URL de Teachable Machine</span>
                         <span class="type-desc">Usa un modelo ya entrenado en Teachable Machine</span>
                     </button>
                     <button class="btn-project-type" id="typeTrainBtn">
-                        <span class="type-icon">🧠</span>
+                        <span class="type-icon">📷</span>
                         <span class="type-label">Entrenar modelo de imagen</span>
                         <span class="type-desc">Entrena tu propio modelo con la cámara</span>
                     </button>
@@ -170,6 +172,11 @@
                         <span class="type-icon">🎤</span>
                         <span class="type-label">Entrenar modelo de audio</span>
                         <span class="type-desc">Entrena tu propio modelo de reconocimiento de sonidos</span>
+                    </button>
+                    <button class="btn-project-type" id="typePoseTrainBtn">
+                        <span class="type-icon">🤸</span>
+                        <span class="type-label">Entrenar modelo de pose</span>
+                        <span class="type-desc">Entrena tu propio modelo de reconocimiento de posturas corporales</span>
                     </button>
                 </div>
             </div>
@@ -222,6 +229,15 @@
     </div>
 
 <div id="statusToast" class="toast"></div>
+
+    <!-- AUDIO RECORD COUNTDOWN MODAL -->
+    <div class="audio-record-modal hidden" id="audioRecordModal">
+        <button class="audio-record-cancel-btn" id="audioRecordCancelBtn" aria-label="Cancelar">×</button>
+        <div class="audio-record-modal-content">
+            <div class="countdown-number" id="countdownNumber">3</div>
+            <div class="countdown-label" id="countdownLabel">Prepárate...</div>
+        </div>
+    </div>
 
     <script type="module" src="js/app.js"></script>
 

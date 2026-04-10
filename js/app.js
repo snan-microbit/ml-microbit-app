@@ -3,18 +3,18 @@
  * Main application logic
  */
 
-import { loadModel, extractClassNames } from './model-loader.js';
+import { Webcam } from './webcam.js';
 import { connectMicrobit, disconnectMicrobit, sendToMicrobit, isConnected, setDisconnectCallback } from './bluetooth.js';
-import { startPredictions, stopPredictions, configurePredictions, applyEnvironmentCamera } from './predictions.js';
 import { openMakeCode, closeMakeCode } from './makecode-embed.js';
 import * as trainer from './image-trainer.js';
 import * as audioTrainer from './audio-trainer.js';
+import * as poseTrainer from './pose-trainer.js';
 
 let currentModel = null;
 const MODELS_KEY = 'tm_microbit_models';
 
 // Tracks which type of project is being created via the name modal
-let pendingProjectType = 'image'; // 'image' | 'audio'
+let pendingProjectType = 'image'; // 'image' | 'audio' | 'pose'
 
 // Webcam unificada: se mueve entre clases (captura) y sección de predicciones
 let activeWebcam = null;
@@ -22,6 +22,9 @@ let activeWebcamTarget = null;  // 'capture' | 'prediction' | null
 let predictionLoopRunning = false;
 let trainingFacingMode = 'user'; // 'user' | 'environment'
 let predictionExpanded = false;
+
+let batchRecordingActive = false;
+let batchRecordingCancelled = false;
 
 const CLASS_COLORS = [
     { bg: '#E1F5EE', dot: '#1D9E75', btnFill: '#1D9E75', badge: '#9FE1CB', badgeText: '#0F6E56', headerText: '#085041', icon: '#0F6E56' },
@@ -37,7 +40,9 @@ function getClassColor(index) {
 }
 
 function getTrainer() {
-    return currentModel?.projectType === 'audio' ? audioTrainer : trainer;
+    if (currentModel?.projectType === 'audio') return audioTrainer;
+    if (currentModel?.projectType === 'pose') return poseTrainer;
+    return trainer;
 }
 
 function resetConnectionUI() {
@@ -62,25 +67,16 @@ function saveModels(models) {
     localStorage.setItem(MODELS_KEY, JSON.stringify(models));
 }
 
-function addProject(name, url, classNames, projectType) {
+function addProject(name, projectType) {
     const models = loadModels();
     const newModel = {
         id: Date.now().toString(),
         name: name.trim(),
+        projectType: projectType,
         createdAt: new Date().toISOString(),
         lastUsed: new Date().toISOString(),
         makecodeProject: null,
     };
-
-    if (url) {
-        newModel.url = url.trim();
-        newModel.classNames = classNames || [];
-    }
-
-    if (projectType) {
-        newModel.projectType = projectType;
-    }
-
     models.unshift(newModel);
     saveModels(models);
     return newModel;
@@ -94,6 +90,9 @@ async function deleteModel(id) {
         if (project.localModel.source === 'local-audio') {
             await audioTrainer.deleteModel(project.localModel.storageKey);
             await audioTrainer.deleteSamplesDB(id);
+        } else if (project.localModel.source === 'local-pose') {
+            await poseTrainer.deleteModel(project.localModel.storageKey);
+            await poseTrainer.deleteSamplesDB(id);
         } else {
             await trainer.deleteModel(project.localModel.storageKey);
             await trainer.deleteSamplesDB(id);
@@ -118,45 +117,46 @@ function renderModels() {
     const modelsList = document.getElementById('modelsList');
     const emptyState = document.getElementById('emptyState');
 
-    if (models.length === 0) {
-        modelsList.innerHTML = '';
-        emptyState.style.display = 'block';
-        return;
-    }
+    // Always hide the old empty state — the New Project card takes its place
+    if (emptyState) emptyState.style.display = 'none';
 
-    emptyState.style.display = 'none';
+    const newProjectCard = `
+        <button class="model-card-new" id="newProjectCard">
+            <span class="card-new-icon">+</span>
+            <span class="card-new-label">Nuevo Proyecto</span>
+        </button>`;
 
-    modelsList.innerHTML = models.map(model => `
+    const projectCards = models.map(model => `
         <div class="model-card">
             <div class="model-card-title">${escapeHtml(model.name)}</div>
             ${model.classNames ? `<div class="model-card-classes">${model.classNames.map(c => escapeHtml(c)).join(' · ')}</div>` : ''}
-            <div class="model-card-date">Creado: ${formatDate(model.createdAt)}</div>
+            <div class="model-card-date">${formatDate(model.createdAt)}</div>
             <div class="model-card-actions">
-                <button class="btn-card btn-use" data-action="open" data-id="${model.id}">
-                    Abrir
-                </button>
-                <button class="btn-card btn-delete" data-action="delete" data-id="${model.id}">
-                    🗑 Eliminar
-                </button>
+                <button class="btn-card btn-use" data-action="open" data-id="${model.id}">Abrir</button>
+                <button class="btn-card btn-delete" data-action="delete" data-id="${model.id}">🗑</button>
             </div>
         </div>
     `).join('');
 
+    modelsList.innerHTML = newProjectCard + projectCards;
+
+    document.getElementById('newProjectCard').addEventListener('click', () => {
+        document.getElementById('projectTypeModal').classList.remove('hidden');
+    });
+
     modelsList.querySelectorAll('[data-action="open"]').forEach(btn => {
-        btn.addEventListener('click', async () => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
             const model = loadModels().find(m => m.id === btn.dataset.id);
             if (!model) return;
-            if (isUrlModel(model)) {
-                await openPredictionScreen(model);
-            } else {
-                currentModel = model;
-                await openTrainingScreen(model);
-            }
+            currentModel = model;
+            await openTrainingScreen(model);
         });
     });
 
     modelsList.querySelectorAll('[data-action="delete"]').forEach(btn => {
-        btn.addEventListener('click', async () => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
             if (confirm('¿Eliminar este proyecto?')) {
                 await deleteModel(btn.dataset.id);
                 renderModels();
@@ -176,23 +176,20 @@ function showScreen(screenId) {
 
 }
 
-function isUrlModel(model) {
-    return !!(model?.url && !model?.localModel);
-}
-
 async function openPredictionScreen(model) {
     currentModel = model;
     document.getElementById('predictionModelName').textContent = model.name;
 
-    const retrainBtn = document.getElementById('predictionRetrainBtn');
-    retrainBtn.style.display = model.url ? 'none' : '';
+    document.getElementById('predictionRetrainBtn').style.display = '';
 
     const isAudio = model.projectType === 'audio' || model.localModel?.source === 'local-audio';
+    const isPose = model.projectType === 'pose' || model.localModel?.source === 'local-pose';
 
     // Flip button only makes sense for camera models
     document.getElementById('predictionFlipBtn').style.display = isAudio ? 'none' : '';
 
-    stopPredictions();
+    batchRecordingActive = false;
+    batchRecordingCancelled = true;
     stopPredictionLoop();
     audioTrainer.stopListening();
     audioTrainer.stopVisualizer();
@@ -213,7 +210,7 @@ async function openPredictionScreen(model) {
     showToast('Cargando modelo...', 'info');
 
     try {
-        if (model.localModel?.source === 'local-audio') {
+        if (isAudio) {
             // Local audio model: load weights + start visualizer + start listening
             await audioTrainer.loadSavedModel(model.localModel);
 
@@ -226,13 +223,11 @@ async function openPredictionScreen(model) {
             wrapper.appendChild(canvas);
             await audioTrainer.startVisualizer(canvas);
             await audioTrainer.startListening(preds => renderTrainingPredictions(preds));
-        } else if (model.url) {
-            await loadModel(model.url);
-            configurePredictions({
-                wrapperElementId: 'prediction-webcam-wrapper',
-                containerElementId: 'prediction-predictions'
-            });
-            await startPredictions();
+        } else if (isPose) {
+            if (!poseTrainer.isTrained()) {
+                await poseTrainer.loadSavedModel(model.localModel);
+            }
+            await startPosePredictionLoop();
         } else {
             await startPredictionLoop();
         }
@@ -245,7 +240,9 @@ async function openPredictionScreen(model) {
     }
 
     const classNamesForMakeCode = model.classNames
-        || (isAudio ? audioTrainer.getClassNames() : trainer.getClassNames());
+        || (isAudio ? audioTrainer.getClassNames()
+            : isPose ? poseTrainer.getClassNames()
+            : trainer.getClassNames());
 
     openMakeCode(
         classNamesForMakeCode,
@@ -274,6 +271,7 @@ async function openTrainingScreen(project) {
     audioTrainer.stopVisualizer();
     trainer.dispose();
     audioTrainer.dispose();
+    poseTrainer.dispose();
     document.getElementById('trainProgressText').textContent = '';
 
     trainingFacingMode = 'user';
@@ -281,6 +279,52 @@ async function openTrainingScreen(project) {
     document.body.classList.remove('prediction-expanded');
 
     const isAudio = project.projectType === 'audio';
+    const isPose = project.projectType === 'pose';
+
+    if (isPose) {
+        showToast('Cargando detector de pose...', 'info');
+
+        try {
+            await poseTrainer.initTrainer();
+
+            if (project.localModel) {
+                try {
+                    await poseTrainer.loadSavedModel(project.localModel);
+                } catch (e) {
+                    showScreen('trainingScreen');
+                    document.getElementById('trainingCaptureSection').classList.remove('hidden');
+                    project.localModel.classNames.forEach(name => poseTrainer.addClass(name));
+                    renderTrainingClasses();
+                    await openCaptureWebcamWithSkeleton();
+                    showToast('Listo', 'success');
+                    return;
+                }
+                showToast('Cargando muestras anteriores...', 'info');
+                await poseTrainer.loadSamples(project.id);
+                if (poseTrainer.isTrained()) {
+                    await openPredictionScreen(project);
+                    return;
+                }
+                showScreen('trainingScreen');
+                document.getElementById('trainingCaptureSection').classList.remove('hidden');
+            } else {
+                showScreen('trainingScreen');
+                document.getElementById('trainingCaptureSection').classList.remove('hidden');
+                poseTrainer.addClass('Clase 1');
+                poseTrainer.addClass('Clase 2');
+            }
+
+            renderTrainingClasses();
+            await openCaptureWebcamWithSkeleton();
+            showToast('Listo', 'success');
+        } catch (error) {
+            console.error('Pose training init error:', error);
+            showToast('Error al inicializar detector de pose', 'error');
+            showScreen('homeScreen');
+        }
+
+        return;
+    }
 
     if (isAudio) {
         showToast('Iniciando entrenador de audio...', 'info');
@@ -377,8 +421,8 @@ async function openCaptureWebcam() {
 
     activeWebcamTarget = 'capture';
 
-    const webcam = new window.tmImage.Webcam(400, 400, true);
-    await webcam.setup();
+    const webcam = new Webcam(400, 400, true);
+    await webcam.setup('user');
 
     // Abortar si el modo cambió durante el setup
     if (activeWebcamTarget !== 'capture') {
@@ -403,6 +447,103 @@ async function openCaptureWebcam() {
     requestAnimationFrame(updateLoop);
 }
 
+async function openCaptureWebcamWithSkeleton() {
+    if (activeWebcamTarget === 'capture') closeCaptureWebcamSilent();
+    stopPredictionLoop();
+
+    activeWebcamTarget = 'capture';
+
+    const webcam = new Webcam(400, 400, true);
+    await webcam.setup('user');
+
+    if (activeWebcamTarget !== 'capture') {
+        webcam.stop();
+        return;
+    }
+
+    await webcam.play();
+    activeWebcam = webcam;
+
+    const displayCanvas = document.createElement('canvas');
+    displayCanvas.width = 400;
+    displayCanvas.height = 400;
+    const displayCtx = displayCanvas.getContext('2d');
+
+    const container = document.getElementById('captureWebcamContainer');
+    if (container) {
+        container.innerHTML = '';
+        container.appendChild(displayCanvas);
+    }
+
+    function updateLoop() {
+        if (activeWebcamTarget !== 'capture') return;
+        if (!activeWebcam) return;
+
+        activeWebcam.update();
+        displayCtx.drawImage(activeWebcam.canvas, 0, 0, 400, 400);
+
+        try {
+            poseTrainer.extractKeypoints(activeWebcam.video, performance.now());
+            const landmarks = poseTrainer.getLastLandmarks();
+            if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, 400, 400, true);
+        } catch (e) {
+            // ignore detection errors during preview
+        }
+
+        requestAnimationFrame(updateLoop);
+    }
+    requestAnimationFrame(updateLoop);
+}
+
+async function startPosePredictionLoop() {
+    if (activeWebcamTarget === 'capture') return;
+    stopPredictionLoop();
+
+    const flip = trainingFacingMode === 'user';
+    const wrapper = document.getElementById('prediction-webcam-wrapper');
+    activeWebcam = new Webcam(400, 400, flip);
+    await activeWebcam.setup(trainingFacingMode);
+    await activeWebcam.play();
+
+    const displayCanvas = document.createElement('canvas');
+    displayCanvas.width = 400;
+    displayCanvas.height = 400;
+    const displayCtx = displayCanvas.getContext('2d');
+
+    wrapper.innerHTML = '';
+    wrapper.appendChild(displayCanvas);
+
+    activeWebcamTarget = 'prediction';
+    predictionLoopRunning = true;
+
+    updateTrainButton();
+
+    let inFlight = false;
+    function loop() {
+        if (!predictionLoopRunning || activeWebcamTarget !== 'prediction') return;
+        if (!activeWebcam) return;
+
+        activeWebcam.update();
+        displayCtx.drawImage(activeWebcam.canvas, 0, 0, 400, 400);
+
+        const landmarks = poseTrainer.getLastLandmarks();
+        if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, 400, 400, flip);
+
+        if (!inFlight) {
+            inFlight = true;
+            poseTrainer.predict(activeWebcam.video)
+                .then(preds => {
+                    inFlight = false;
+                    renderTrainingPredictions(preds);
+                })
+                .catch(() => { inFlight = false; });
+        }
+
+        requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+}
+
 async function openAudioVisualizer() {
     const container = document.getElementById('captureWebcamContainer');
     container.innerHTML = '';
@@ -416,6 +557,7 @@ async function openAudioVisualizer() {
 
 function closeCaptureWebcamSilent() {
     trainer.stopCapture();
+    poseTrainer.stopCapture();
     if (activeWebcam && activeWebcamTarget === 'capture') {
         activeWebcam.stop();
         activeWebcam = null;
@@ -431,11 +573,8 @@ async function startPredictionLoop() {
     stopPredictionLoop(); // destruir webcam previa si la hay
 
     const wrapper = document.getElementById('prediction-webcam-wrapper');
-    activeWebcam = new window.tmImage.Webcam(400, 400, trainingFacingMode === 'user');
-    await activeWebcam.setup();
-    if (trainingFacingMode === 'environment') {
-        await applyEnvironmentCamera(activeWebcam);
-    }
+    activeWebcam = new Webcam(400, 400, trainingFacingMode === 'user');
+    await activeWebcam.setup(trainingFacingMode);
     await activeWebcam.play();
 
     wrapper.innerHTML = '';
@@ -480,7 +619,11 @@ async function flipTrainingCamera() {
     trainingFacingMode = trainingFacingMode === 'user' ? 'environment' : 'user';
     stopPredictionLoop();
     await new Promise(r => setTimeout(r, 250)); // wait for camera hardware to release
-    await startPredictionLoop();
+    if (currentModel?.projectType === 'pose') {
+        await startPosePredictionLoop();
+    } else {
+        await startPredictionLoop();
+    }
 }
 
 function togglePredictionExpanded() {
@@ -537,10 +680,10 @@ async function enterCaptureMode() {
     document.body.classList.remove('prediction-expanded');
 
     stopPredictionLoop();
-    stopPredictions();
     closeMakeCode('makecodeInlineFrame');
 
     const isAudio = currentModel?.projectType === 'audio';
+    const isPose = currentModel?.projectType === 'pose';
 
     if (isAudio) {
         audioTrainer.stopListening();
@@ -555,6 +698,15 @@ async function enterCaptureMode() {
         renderTrainingClasses();
         showScreen('trainingScreen');
         await openAudioVisualizer();
+    } else if (isPose) {
+        const classes = poseTrainer.getClasses();
+        const needLoad = classes.length > 0 && classes.every(c => c.count === 0);
+        if (needLoad) await poseTrainer.loadSamples(currentModel.id);
+        renderTrainingClasses();
+
+        document.getElementById('trainingCaptureSection').classList.remove('hidden');
+        showScreen('trainingScreen');
+        await openCaptureWebcamWithSkeleton();
     } else {
         // Restaurar muestras desde IDB si no hay samples en memoria
         const classes = trainer.getClasses();
@@ -596,14 +748,15 @@ function renderTrainingPredictions(predictions) {
 function updateClassUI(classIndex) {
     const card = document.querySelector(`#trainingClassesList [data-index="${classIndex}"]`);
     if (!card) return;
-    const c = trainer.getClasses()[classIndex];
+    const t = getTrainer();
+    const c = t.getClasses()[classIndex];
 
     const badge = card.querySelector('.sample-badge');
     if (badge) badge.textContent = `${c.count} muestras`;
 
     const gallery = card.querySelector('.sample-gallery');
     if (gallery) {
-        const samples = trainer.getSamples(classIndex);
+        const samples = t.getSamples(classIndex);
         gallery.innerHTML = samples.map(s => `
             <div class="sample-thumb">
                 <img src="${s.thumb}">
@@ -612,7 +765,7 @@ function updateClassUI(classIndex) {
         `).join('');
         gallery.querySelectorAll('.btn-delete-sample').forEach(btn => {
             btn.addEventListener('click', () => {
-                trainer.deleteSample(+btn.dataset.ci, +btn.dataset.si);
+                t.deleteSample(+btn.dataset.ci, +btn.dataset.si);
                 updateClassUI(classIndex);
                 updateTrainButton();
             });
@@ -625,6 +778,10 @@ function updateClassUI(classIndex) {
 function renderTrainingClasses() {
     if (currentModel?.projectType === 'audio') {
         renderAudioTrainingClasses();
+        return;
+    }
+    if (currentModel?.projectType === 'pose') {
+        renderPoseTrainingClasses();
         return;
     }
 
@@ -745,26 +902,206 @@ function renderTrainingClasses() {
 
     container.querySelectorAll('.btn-capture-hold').forEach(btn => {
         const ci = +btn.dataset.index;
-        const startHold = () => {
+        btn.addEventListener('click', () => {
             if (!activeWebcam || activeWebcamTarget !== 'capture') return;
-            btn.classList.add('capturing');
-            trainer.startCapture(ci, activeWebcam.canvas);
-            btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
-        };
-        const stopHold = () => {
-            btn.classList.remove('capturing');
-            trainer.stopCapture();
-            clearInterval(btn._updateInterval);
-            updateClassUI(ci);
-        };
-
-        btn.addEventListener('mousedown', startHold);
-        btn.addEventListener('mouseup', stopHold);
-        btn.addEventListener('mouseleave', stopHold);
-        btn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); });
-        btn.addEventListener('touchend', stopHold);
+            if (btn.classList.contains('capturing')) {
+                btn.classList.remove('capturing');
+                trainer.stopCapture();
+                clearInterval(btn._updateInterval);
+                updateClassUI(ci);
+            } else {
+                container.querySelectorAll('.btn-capture-hold.capturing').forEach(other => {
+                    other.classList.remove('capturing');
+                    clearInterval(other._updateInterval);
+                });
+                btn.classList.add('capturing');
+                trainer.startCapture(ci, activeWebcam.canvas);
+                btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
+            }
+        });
     });
 
+    updateTrainButton();
+}
+
+function renderPoseTrainingClasses() {
+    const container = document.getElementById('trainingClassesList');
+    const cls = poseTrainer.getClasses();
+
+    container.innerHTML = cls.map((c, i) => {
+        const color = getClassColor(i);
+        const samples = poseTrainer.getSamples(i);
+
+        return `
+        <div class="training-class-card" data-index="${i}">
+            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
+                <div class="class-card-header-left">
+                    <div class="class-dot" style="background:${color.dot};"></div>
+                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}" style="color:${color.headerText};">
+                </div>
+                <div class="class-card-header-right">
+                    <span class="sample-badge" data-index="${i}" style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
+                    <div class="class-menu-wrapper">
+                        <button class="btn-class-menu" data-index="${i}" title="Opciones">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
+                                <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+                            </svg>
+                        </button>
+                        <div class="class-dropdown">
+                            <button class="class-dropdown-item btn-pose-clear" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+                                </svg>
+                                Borrar muestras
+                            </button>
+                            <button class="class-dropdown-item btn-pose-delete danger" data-index="${i}">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
+                                </svg>
+                                Eliminar clase
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="class-card-body">
+                <div class="class-capture-buttons">
+                    <button class="btn-capture-one btn-pose-capture-one" data-index="${i}" style="background:${color.bg}; color:${color.headerText}; border-color:${color.badge};">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
+                        Tomar
+                    </button>
+                    <button class="btn-capture-hold btn-pose-capture-hold" data-index="${i}" style="background:${color.btnFill};">
+                        <span class="hold-dot"></span>
+                        Mantener
+                    </button>
+                </div>
+                <div class="sample-gallery">
+                    ${samples.map(s => `
+                        <div class="sample-thumb">
+                            <img src="${s.thumb}">
+                            <button class="btn-delete-sample" data-ci="${i}" data-si="${s.index}">×</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    container.querySelectorAll('.class-name-input').forEach(input => {
+        input.addEventListener('change', () => {
+            poseTrainer.renameClass(+input.dataset.index, input.value.trim());
+        });
+    });
+
+    container.querySelectorAll('.btn-class-menu').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropdown = btn.closest('.class-menu-wrapper').querySelector('.class-dropdown');
+            document.querySelectorAll('.class-dropdown.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
+        });
+    });
+
+    container.querySelectorAll('.btn-pose-clear').forEach(btn => {
+        btn.addEventListener('click', () => {
+            poseTrainer.clearSamples(+btn.dataset.index);
+            renderTrainingClasses();
+            updateTrainButton();
+        });
+    });
+
+    container.querySelectorAll('.btn-pose-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (poseTrainer.getTotalClasses() <= 2) {
+                showToast('Mínimo 2 clases', 'error');
+                return;
+            }
+            poseTrainer.removeClass(+btn.dataset.index);
+            renderTrainingClasses();
+        });
+    });
+
+    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const ci = +btn.dataset.ci;
+            poseTrainer.deleteSample(ci, +btn.dataset.si);
+            updateClassUI(ci);
+        });
+    });
+
+    container.querySelectorAll('.btn-pose-capture-one').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+            const ok = poseTrainer.captureOne(+btn.dataset.index, activeWebcam.canvas, activeWebcam.video);
+            if (!ok) showToast('No se detectó pose. Asegurate de estar visible en la cámara.', 'info');
+            updateClassUI(+btn.dataset.index);
+        });
+    });
+
+    container.querySelectorAll('.btn-pose-capture-hold').forEach(btn => {
+        const ci = +btn.dataset.index;
+        btn.addEventListener('click', () => {
+            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+            if (btn.classList.contains('capturing')) {
+                btn.classList.remove('capturing');
+                poseTrainer.stopCapture();
+                clearInterval(btn._updateInterval);
+                updateClassUI(ci);
+            } else {
+                container.querySelectorAll('.btn-pose-capture-hold.capturing').forEach(other => {
+                    other.classList.remove('capturing');
+                    clearInterval(other._updateInterval);
+                });
+                btn.classList.add('capturing');
+                poseTrainer.startCapture(ci, activeWebcam.canvas, activeWebcam.video);
+                btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
+            }
+        });
+    });
+
+    updateTrainButton();
+}
+
+async function recordWithCountdown(classIndex, current = null, total = null) {
+    const modal = document.getElementById('audioRecordModal');
+    const numberEl = document.getElementById('countdownNumber');
+    const labelEl = document.getElementById('countdownLabel');
+
+    modal.classList.remove('hidden');
+
+    for (let i = 3; i >= 1; i--) {
+        numberEl.className = 'countdown-number';
+        numberEl.textContent = i;
+        labelEl.textContent = (current !== null && total !== null)
+            ? `Muestra ${current}/${total}`
+            : 'Prepárate...';
+        // Re-trigger animation by forcing reflow
+        void numberEl.offsetWidth;
+        numberEl.classList.add('pulse');
+        await new Promise(r => setTimeout(r, 800));
+    }
+
+    numberEl.className = 'countdown-number recording';
+    numberEl.textContent = '🔴';
+    labelEl.textContent = '¡GRABANDO!';
+
+    try {
+        await audioTrainer.recordSample(classIndex);
+    } catch (e) {
+        console.error('Recording error:', e);
+    }
+
+    numberEl.className = 'countdown-number done';
+    numberEl.textContent = '✓';
+    labelEl.textContent = 'Listo';
+
+    await new Promise(r => setTimeout(r, 400));
+
+    modal.classList.add('hidden');
+
+    updateClassUIAudio(classIndex);
     updateTrainButton();
 }
 
@@ -776,6 +1113,7 @@ function renderAudioTrainingClasses() {
         const color = getClassColor(i);
         const isBackground = i === 0; // "Ruido de fondo" is always index 0
         const pct = Math.min(100, (c.count / 20) * 100);
+        const samples = audioTrainer.getSamples(i);
 
         return `
         <div class="training-class-card" data-index="${i}">
@@ -828,6 +1166,14 @@ function renderAudioTrainingClasses() {
                         Mantener
                     </button>
                 </div>
+                <div class="sample-gallery">
+                    ${samples.map(s => `
+                        <div class="sample-thumb">
+                            <img src="${s.thumb}">
+                            <button class="btn-delete-sample" data-ci="${i}" data-si="${s.index}">×</button>
+                        </div>
+                    `).join('')}
+                </div>
             </div>
         </div>`;
     }).join('');
@@ -875,58 +1221,76 @@ function renderAudioTrainingClasses() {
                 showToast('Mínimo 2 clases', 'error');
                 return;
             }
+            batchRecordingActive = false;
+            batchRecordingCancelled = true;
             audioTrainer.removeClass(+btn.dataset.index);
             renderTrainingClasses();
         });
     });
 
-    // ── Single record (~1 second) ──
-    container.querySelectorAll('.btn-audio-record').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            if (audioTrainer.getIsRecording()) return;
-            const ci = +btn.dataset.index;
-            btn.classList.add('recording');
-            btn.querySelector('svg').style.display = 'none';
-            btn.childNodes[btn.childNodes.length - 1].textContent = ' Grabando...';
-            try {
-                await audioTrainer.recordSample(ci);
-            } catch (e) {
-                console.error('Recording error:', e);
-            }
-            btn.classList.remove('recording');
-            btn.querySelector('svg').style.display = '';
-            btn.childNodes[btn.childNodes.length - 1].textContent = ' Grabar';
+    // ── Delete individual sample ──
+    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const ci = +btn.dataset.ci;
+            audioTrainer.deleteSample(ci, +btn.dataset.si);
             updateClassUIAudio(ci);
             updateTrainButton();
         });
     });
 
-    // ── Continuous record (hold) ──
+    // ── Single record (~1 second) with countdown ──
+    container.querySelectorAll('.btn-audio-record').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (audioTrainer.getIsRecording()) return;
+            await recordWithCountdown(+btn.dataset.index);
+        });
+    });
+
+    // ── Batch record (toggle: 10 muestras con countdown) ──
     container.querySelectorAll('.btn-audio-record-hold').forEach(btn => {
         const ci = +btn.dataset.index;
 
-        const startHold = () => {
-            btn.classList.add('capturing');
-            audioTrainer.startContinuousRecording(ci);
-            btn._updateInterval = setInterval(() => {
-                updateClassUIAudio(ci);
-                updateTrainButton();
-            }, 500);
-        };
+        btn.addEventListener('click', async () => {
+            // Segundo click durante un batch: cancelar
+            if (batchRecordingActive) {
+                if (!batchRecordingCancelled) {
+                    batchRecordingCancelled = true;
+                    btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
+                }
+                return;
+            }
 
-        const stopHold = () => {
+            // Primer click: iniciar batch de 10 grabaciones
+            batchRecordingActive = true;
+            batchRecordingCancelled = false;
+            btn.classList.add('capturing');
+
+            const cancelBtn = document.getElementById('audioRecordCancelBtn');
+            cancelBtn.classList.add('visible');
+            cancelBtn.onclick = () => {
+                if (!batchRecordingCancelled) {
+                    batchRecordingCancelled = true;
+                    btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
+                }
+            };
+
+            for (let n = 1; n <= 10; n++) {
+                if (batchRecordingCancelled) break;
+                await recordWithCountdown(ci, n, 10);
+                if (batchRecordingCancelled) break;
+            }
+
+            cancelBtn.classList.remove('visible');
+            cancelBtn.onclick = null;
+
+            batchRecordingActive = false;
+            batchRecordingCancelled = false;
             btn.classList.remove('capturing');
-            audioTrainer.stopContinuousRecording();
-            clearInterval(btn._updateInterval);
+            btn.innerHTML = '<span class="hold-dot"></span> Mantener';
+
             updateClassUIAudio(ci);
             updateTrainButton();
-        };
-
-        btn.addEventListener('mousedown', startHold);
-        btn.addEventListener('mouseup', stopHold);
-        btn.addEventListener('mouseleave', stopHold);
-        btn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); });
-        btn.addEventListener('touchend', stopHold);
+        });
     });
 
     updateTrainButton();
@@ -943,6 +1307,24 @@ function updateClassUIAudio(classIndex) {
 
     const fill = card.querySelector('.audio-sample-bar-fill');
     if (fill) fill.style.width = Math.min(100, (c.count / 20) * 100) + '%';
+
+    const gallery = card.querySelector('.sample-gallery');
+    if (gallery) {
+        const samples = audioTrainer.getSamples(classIndex);
+        gallery.innerHTML = samples.map(s => `
+            <div class="sample-thumb">
+                <img src="${s.thumb}">
+                <button class="btn-delete-sample" data-ci="${classIndex}" data-si="${s.index}">×</button>
+            </div>
+        `).join('');
+        gallery.querySelectorAll('.btn-delete-sample').forEach(btn => {
+            btn.addEventListener('click', () => {
+                audioTrainer.deleteSample(+btn.dataset.ci, +btn.dataset.si);
+                updateClassUIAudio(classIndex);
+                updateTrainButton();
+            });
+        });
+    }
 }
 
 function updateTrainButton() {
@@ -950,51 +1332,13 @@ function updateTrainButton() {
     const t = getTrainer();
     const cls = t.getClasses();
     const ready = cls.length >= 2 && cls.every(c => c.count >= 8);
-    document.getElementById('trainBtn').disabled = !ready || (!isAudio && predictionLoopRunning);
+    const isCameraModel = !isAudio;
+    document.getElementById('trainBtn').disabled = !ready || (isCameraModel && predictionLoopRunning);
 }
 
 // ============================================
 // MODAL
 // ============================================
-
-function showNewModelModal() {
-    document.getElementById('newModelModal').classList.remove('hidden');
-    document.getElementById('modelNameInput').value = '';
-    document.getElementById('modelUrlInput').value = '';
-    document.getElementById('modelNameInput').focus();
-}
-
-function hideModal() {
-    document.getElementById('newModelModal').classList.add('hidden');
-}
-
-async function saveNewModel() {
-    const name = document.getElementById('modelNameInput').value.trim();
-    const url = document.getElementById('modelUrlInput').value.trim();
-
-    if (!name) {
-        showToast('Ingresa un nombre', 'error');
-        return;
-    }
-
-    if (!url || !url.includes('teachablemachine.withgoogle.com')) {
-        showToast('URL inválida', 'error');
-        return;
-    }
-
-    hideModal();
-    showToast('Leyendo modelo...', 'info');
-
-    try {
-        const classNames = await extractClassNames(url);
-        const model = addProject(name, url, classNames);
-        renderModels();
-        await openPredictionScreen(model);
-    } catch (error) {
-        console.error('Error extracting classes:', error);
-        showToast('Error al leer el modelo', 'error');
-    }
-}
 
 // ============================================
 // UTILITIES
@@ -1043,11 +1387,6 @@ document.getElementById('closeTypeModalBtn').addEventListener('click', () => {
     document.getElementById('projectTypeModal').classList.add('hidden');
 });
 
-document.getElementById('typeUrlBtn').addEventListener('click', () => {
-    document.getElementById('projectTypeModal').classList.add('hidden');
-    showNewModelModal();
-});
-
 document.getElementById('typeTrainBtn').addEventListener('click', () => {
     pendingProjectType = 'image';
     document.getElementById('projectTypeModal').classList.add('hidden');
@@ -1058,6 +1397,14 @@ document.getElementById('typeTrainBtn').addEventListener('click', () => {
 
 document.getElementById('typeAudioTrainBtn').addEventListener('click', () => {
     pendingProjectType = 'audio';
+    document.getElementById('projectTypeModal').classList.add('hidden');
+    document.getElementById('trainNameModal').classList.remove('hidden');
+    document.getElementById('trainProjectName').value = '';
+    document.getElementById('trainProjectName').focus();
+});
+
+document.getElementById('typePoseTrainBtn').addEventListener('click', () => {
+    pendingProjectType = 'pose';
     document.getElementById('projectTypeModal').classList.add('hidden');
     document.getElementById('trainNameModal').classList.remove('hidden');
     document.getElementById('trainProjectName').value = '';
@@ -1082,7 +1429,7 @@ document.getElementById('startTrainingBtn').addEventListener('click', async () =
 
     document.getElementById('trainNameModal').classList.add('hidden');
 
-    currentModel = addProject(name, null, null, pendingProjectType);
+    currentModel = addProject(name, pendingProjectType);
     renderModels();
     await openTrainingScreen(currentModel);
 });
@@ -1091,22 +1438,17 @@ document.getElementById('trainProjectName').addEventListener('keypress', (e) => 
     if (e.key === 'Enter') document.getElementById('startTrainingBtn').click();
 });
 
-// URL modal
-document.getElementById('closeModalBtn').addEventListener('click', hideModal);
-document.getElementById('cancelModalBtn').addEventListener('click', hideModal);
-document.getElementById('saveModelBtn').addEventListener('click', saveNewModel);
-document.getElementById('modelUrlInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') saveNewModel();
-});
-
 // Training screen
 document.getElementById('trainingBackBtn').addEventListener('click', () => {
+    batchRecordingActive = false;
+    batchRecordingCancelled = true;
     closeCaptureWebcamSilent();
     audioTrainer.stopListening();
     audioTrainer.stopVisualizer();
     disconnectMicrobit();
     trainer.dispose();
     audioTrainer.dispose();
+    poseTrainer.dispose();
     document.getElementById('trainingClassesList').innerHTML = '';
     trainingFacingMode = 'user';
     renderModels();
@@ -1115,10 +1457,10 @@ document.getElementById('trainingBackBtn').addEventListener('click', () => {
 
 // Prediction screen
 document.getElementById('predictionBackBtn').addEventListener('click', () => {
-    stopPredictions();
     stopPredictionLoop();
     audioTrainer.stopListening();
     audioTrainer.stopVisualizer();
+    poseTrainer.dispose();
     closeMakeCode('makecodeInlineFrame');
     disconnectMicrobit();
     predictionExpanded = false;

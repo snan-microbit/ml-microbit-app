@@ -15,6 +15,9 @@ let transfer = null;
 // Class names tracked separately
 let classNames = [];
 
+// Spectrogram thumbnails by class name
+let classThumbs = {};
+
 // Recording state
 let isRecording = false;
 
@@ -29,6 +32,52 @@ let visualizerRunning = false;
 let vizCanvas = null;
 
 // ============================================
+// SPECTROGRAM THUMBNAIL
+// ============================================
+
+function generateSpectrogramThumb(spectrogramData, frameSize) {
+    const numFrames = spectrogramData.length / frameSize;
+
+    const c = document.createElement('canvas');
+    c.width = numFrames;
+    c.height = frameSize;
+    const ctx = c.getContext('2d');
+    const imgData = ctx.createImageData(numFrames, frameSize);
+
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < spectrogramData.length; i++) {
+        if (spectrogramData[i] < min) min = spectrogramData[i];
+        if (spectrogramData[i] > max) max = spectrogramData[i];
+    }
+    const range = max - min || 1;
+
+    for (let frame = 0; frame < numFrames; frame++) {
+        for (let bin = 0; bin < frameSize; bin++) {
+            const val = spectrogramData[frame * frameSize + bin];
+            const norm = (val - min) / range;
+            const brightness = Math.floor(norm * 255);
+
+            const y = frameSize - 1 - bin;
+            const idx = (y * numFrames + frame) * 4;
+
+            imgData.data[idx]     = 0;
+            imgData.data[idx + 1] = Math.floor(brightness * 0.62);
+            imgData.data[idx + 2] = Math.floor(brightness * 0.58);
+            imgData.data[idx + 3] = 255;
+        }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+
+    const thumb = document.createElement('canvas');
+    thumb.width = 80;
+    thumb.height = 60;
+    thumb.getContext('2d').drawImage(c, 0, 0, 80, 60);
+
+    return thumb.toDataURL('image/png');
+}
+
+// ============================================
 // INIT
 // ============================================
 
@@ -37,7 +86,7 @@ async function initTrainer() {
 
     baseRecognizer = speechCommands.create('BROWSER_FFT');
     await baseRecognizer.ensureModelLoaded();
-    transfer = baseRecognizer.createTransfer('tm-audio');
+    transfer = baseRecognizer.createTransfer('tm-audio-' + Date.now());
 
     console.log('Audio trainer ready');
 }
@@ -52,6 +101,8 @@ function addClass(name) {
 }
 
 function removeClass(index) {
+    const name = classNames[index];
+    delete classThumbs[name];
     classNames.splice(index, 1);
 }
 
@@ -77,6 +128,29 @@ function clearSamples(index) {
         }
     } catch (e) {
         console.warn('clearExamples error:', e);
+    }
+    // clearExamples clears ALL examples across all classes
+    classThumbs = {};
+}
+
+function getSamples(classIndex) {
+    const name = classNames[classIndex];
+    const thumbs = classThumbs[name] || [];
+    return thumbs.map((thumb, i) => ({ index: i, thumb }));
+}
+
+function deleteSample(classIndex, sampleIndex) {
+    const name = classNames[classIndex];
+    const examples = transfer.getExamples(name);
+    if (examples && examples[sampleIndex]) {
+        try {
+            transfer.removeExample(examples[sampleIndex].uid);
+        } catch (e) {
+            console.warn('removeExample error:', e);
+        }
+    }
+    if (classThumbs[name]) {
+        classThumbs[name].splice(sampleIndex, 1);
     }
 }
 
@@ -109,10 +183,29 @@ async function recordSample(classIndex) {
     if (isRecording) return;
     const name = classNames[classIndex];
     isRecording = true;
+
+    const wasListening = isListening();
+    if (wasListening) stopListening();
+
     try {
         await transfer.collectExample(name);
+        const examples = transfer.getExamples(name);
+        const last = examples[examples.length - 1];
+        const thumb = generateSpectrogramThumb(
+            last.example.spectrogram.data,
+            last.example.spectrogram.frameSize
+        );
+        if (!classThumbs[name]) classThumbs[name] = [];
+        classThumbs[name].push(thumb);
     } finally {
         isRecording = false;
+        if (wasListening && predictionCallback) {
+            try {
+                await startListening(predictionCallback);
+            } catch (e) {
+                console.warn('Could not resume listening:', e);
+            }
+        }
     }
 }
 
@@ -126,12 +219,32 @@ function getIsRecording() {
 async function startContinuousRecording(classIndex) {
     isRecording = true;
     const name = classNames[classIndex];
+
+    const wasListening = isListening();
+    if (wasListening) stopListening();
+
     while (isRecording) {
         try {
             await transfer.collectExample(name);
+            const examples = transfer.getExamples(name);
+            const last = examples[examples.length - 1];
+            const thumb = generateSpectrogramThumb(
+                last.example.spectrogram.data,
+                last.example.spectrogram.frameSize
+            );
+            if (!classThumbs[name]) classThumbs[name] = [];
+            classThumbs[name].push(thumb);
         } catch (e) {
             console.warn('Recording error:', e);
             break;
+        }
+    }
+
+    if (wasListening && predictionCallback) {
+        try {
+            await startListening(predictionCallback);
+        } catch (e) {
+            console.warn('Could not resume listening:', e);
         }
     }
 }
@@ -151,6 +264,26 @@ async function train(onProgress) {
     const classesWithSamples = classNames.filter(n => (counts[n] || 0) >= 8);
     if (classesWithSamples.length < 2) {
         throw new Error('Se necesitan al menos 2 clases con 8+ muestras cada una');
+    }
+
+    // Serialize current samples, recreate transfer recognizer fresh,
+    // and reload samples. This avoids the "trainable" error that occurs
+    // when trying to retrain after transfer.load() corrupted internal state.
+    const serialized = transfer.serializeExamples();
+    transfer = baseRecognizer.createTransfer('tm-audio-' + Date.now());
+    transfer.loadExamples(serialized, false);
+
+    // Regenerate thumbnails since transfer was recreated
+    classThumbs = {};
+    for (const name of classNames) {
+        const examples = transfer.getExamples(name);
+        if (!examples) continue;
+        classThumbs[name] = examples.map(ex =>
+            generateSpectrogramThumb(
+                ex.example.spectrogram.data,
+                ex.example.spectrogram.frameSize
+            )
+        );
     }
 
     const totalEpochs = 50;
@@ -179,13 +312,15 @@ async function startListening(callback) {
     predictionCallback = callback;
 
     await transfer.listen(result => {
-        // Use our own classNames for label mapping — avoids uncertainty
-        // about what transfer.wordLabels() returns after model reload.
+        // Use transfer.wordLabels() for label mapping — scores are in
+        // alphabetical order matching wordLabels, not classNames order.
+        const labels = transfer.wordLabels();  // orden correcto (alfabético)
         const scores = Array.from(result.scores);
         const predictions = scores.map((score, i) => ({
-            className: classNames[i] || `Clase ${i}`,
+            className: labels[i],     
             probability: score
         }));
+
         if (predictionCallback) predictionCallback(predictions);
     }, {
         probabilityThreshold: 0.3,
@@ -262,18 +397,27 @@ function drawVisualizer() {
     ctx.stroke();
 
     const binFrequency = 22050 / bufferLength;
-    const minBin = Math.floor(80 / binFrequency);
-    const maxBin = Math.floor(8000 / binFrequency);
-    const usefulBins = maxBin - minBin;
+    const logMin = Math.log10(80);
+    const logMax = Math.log10(4000);
 
+    const barValues = [];
     for (let i = 0; i < barCount; i++) {
-        const start = minBin + Math.floor((i * usefulBins) / barCount);
-        const end = minBin + Math.floor(((i + 1) * usefulBins) / barCount);
-        let sum = 0;
-        for (let j = start; j < end; j++) sum += dataArray[j];
-        const average = sum / Math.max(1, end - start);
+        const freqStart = Math.pow(10, logMin + (i / barCount) * (logMax - logMin));
+        const freqEnd = Math.pow(10, logMin + ((i + 1) / barCount) * (logMax - logMin));
+        const start = Math.max(0, Math.floor(freqStart / binFrequency));
+        const end = Math.min(bufferLength - 1, Math.floor(freqEnd / binFrequency));
+        let sum = 0, count = 0;
+        for (let j = start; j <= end; j++) { sum += dataArray[j]; count++; }
+        barValues.push(count > 0 ? sum / count : 0);
+    }
 
-        const fullBarHeight = (average / 255) * h * 0.85;
+    const threshold = 40;
+    const half = barCount / 2;
+    for (let i = 0; i < barCount; i++) {
+        const freqIndex = i < half ? half - 1 - i : i - half;
+        const average = barValues[freqIndex];
+        const gated = average > threshold ? average - threshold : 0;
+        const fullBarHeight = (gated / (255 - threshold)) * h * 0.65;
         const halfBarHeight = fullBarHeight / 2;
         const x = i * (barWidth + barGap) + barGap / 2;
 
@@ -431,7 +575,7 @@ async function loadSavedModel(localModelInfo) {
     // Restore word labels so listen() maps scores correctly
     for (const prop of ['words', 'words_', 'wordList_']) {
         if (prop in transfer) {
-            transfer[prop] = [...classNames];
+            transfer[prop] = [...classNames].sort();
             break;
         }
     }
@@ -459,6 +603,19 @@ async function loadSamples(projectId) {
         transfer.loadExamples(serialized, false);
     } catch (e) {
         console.warn('Could not load audio samples:', e);
+        return;
+    }
+
+    classThumbs = {};
+    for (const name of classNames) {
+        const examples = transfer.getExamples(name);
+        if (!examples || examples.length === 0) continue;
+        classThumbs[name] = examples.map(ex =>
+            generateSpectrogramThumb(
+                ex.example.spectrogram.data,
+                ex.example.spectrogram.frameSize
+            )
+        );
     }
 }
 
@@ -500,6 +657,7 @@ function dispose() {
     transfer = null;
     baseRecognizer = null;
     classNames = [];
+    classThumbs = {};
     isRecording = false;
     predictionCallback = null;
 }
@@ -508,6 +666,7 @@ export {
     initTrainer,
     addClass, removeClass, renameClass,
     clearSamples, getClasses, getClassNames, getTotalClasses,
+    getSamples, deleteSample,
     recordSample, startContinuousRecording, stopContinuousRecording,
     getIsRecording,
     train,
