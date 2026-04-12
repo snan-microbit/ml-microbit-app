@@ -946,7 +946,9 @@ button, a, input {
 }
 
 .btn-capture-one,
-.btn-capture-hold {
+.btn-capture-hold,
+.btn-capture-one-unified,
+.btn-capture-hold-unified {
     width: auto;
     padding: 7px 14px;
     border-radius: 8px;
@@ -964,28 +966,33 @@ button, a, input {
     touch-action: manipulation;
 }
 
-.btn-capture-one {
+.btn-capture-one,
+.btn-capture-one-unified {
     background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
 }
 
-.btn-capture-one:active {
+.btn-capture-one:active,
+.btn-capture-one-unified:active {
     background: var(--bg);
     transform: scale(0.98);
 }
 
-.btn-capture-hold {
+.btn-capture-hold,
+.btn-capture-hold-unified {
     color: white;
     border: none;
 }
 
-.btn-capture-hold:active {
+.btn-capture-hold:active,
+.btn-capture-hold-unified:active {
     filter: brightness(0.9);
     transform: scale(0.98);
 }
 
-.btn-capture-hold.capturing {
+.btn-capture-hold.capturing,
+.btn-capture-hold-unified.capturing {
     background: #e63946 !important;
     animation: pulse-capture 0.8s infinite;
 }
@@ -1722,6 +1729,47 @@ button, a, input {
 }
 
 .countdown-number.done {
+    color: #009f95;
+    font-size: 80px;
+}
+
+/* Training overlay — fullscreen progress during model training */
+.training-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+}
+
+.training-overlay.hidden {
+    display: none;
+}
+
+.training-overlay-content {
+    text-align: center;
+    color: white;
+}
+
+.training-overlay-pct {
+    font-size: 100px;
+    font-weight: 800;
+    font-family: 'Nunito', sans-serif;
+    line-height: 1;
+    margin-bottom: 16px;
+    transition: opacity 0.15s;
+}
+
+.training-overlay-label {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: 'Nunito', sans-serif;
+    opacity: 0.85;
+}
+
+.training-overlay-pct.done {
     color: #009f95;
     font-size: 80px;
 }

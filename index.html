@@ -230,6 +230,14 @@ console.log('✅ MediaPipe loaded (self-hosted)');
 
 <div id="statusToast" class="toast"></div>
 
+    <!-- TRAINING OVERLAY -->
+    <div class="training-overlay hidden" id="trainingOverlay">
+        <div class="training-overlay-content">
+            <div class="training-overlay-pct" id="trainingOverlayPct">0%</div>
+            <div class="training-overlay-label">Entrenando modelo...</div>
+        </div>
+    </div>
+
     <!-- AUDIO RECORD COUNTDOWN MODAL -->
     <div class="audio-record-modal hidden" id="audioRecordModal">
         <button class="audio-record-cancel-btn" id="audioRecordCancelBtn" aria-label="Cancelar">×</button>

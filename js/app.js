@@ -9,9 +9,10 @@ import { openMakeCode, closeMakeCode } from './makecode-embed.js';
 import * as trainer from './image-trainer.js';
 import * as audioTrainer from './audio-trainer.js';
 import * as poseTrainer from './pose-trainer.js';
+import { loadModels, saveModels, addProject, deleteProject, updateProjectMakeCode, updateProjectModel } from './project-store.js';
+import { getConfig } from './trainer-config.js';
 
 let currentModel = null;
-const MODELS_KEY = 'tm_microbit_models';
 
 // Tracks which type of project is being created via the name modal
 let pendingProjectType = 'image'; // 'image' | 'audio' | 'pose'
@@ -36,7 +37,7 @@ const CLASS_COLORS = [
 ];
 
 function getClassColor(index) {
-    return CLASS_COLORS[index % CLASS_COLORS.length];
+    return CLASS_COLORS[0];
 }
 
 function getTrainer() {
@@ -58,58 +59,8 @@ setDisconnectCallback(resetConnectionUI);
 // PROJECT LIBRARY
 // ============================================
 
-function loadModels() {
-    const stored = localStorage.getItem(MODELS_KEY);
-    return stored ? JSON.parse(stored) : [];
-}
-
-function saveModels(models) {
-    localStorage.setItem(MODELS_KEY, JSON.stringify(models));
-}
-
-function addProject(name, projectType) {
-    const models = loadModels();
-    const newModel = {
-        id: Date.now().toString(),
-        name: name.trim(),
-        projectType: projectType,
-        createdAt: new Date().toISOString(),
-        lastUsed: new Date().toISOString(),
-        makecodeProject: null,
-    };
-    models.unshift(newModel);
-    saveModels(models);
-    return newModel;
-}
-
-async function deleteModel(id) {
-    const models = loadModels();
-    const project = models.find(m => m.id === id);
-
-    if (project?.localModel?.storageKey) {
-        if (project.localModel.source === 'local-audio') {
-            await audioTrainer.deleteModel(project.localModel.storageKey);
-            await audioTrainer.deleteSamplesDB(id);
-        } else if (project.localModel.source === 'local-pose') {
-            await poseTrainer.deleteModel(project.localModel.storageKey);
-            await poseTrainer.deleteSamplesDB(id);
-        } else {
-            await trainer.deleteModel(project.localModel.storageKey);
-            await trainer.deleteSamplesDB(id);
-        }
-    }
-
-    saveModels(models.filter(m => m.id !== id));
-}
-
-function updateProjectMakeCode(id, makecodeProject) {
-    const models = loadModels();
-    const model = models.find(m => m.id === id);
-    if (model) {
-        model.makecodeProject = makecodeProject;
-        model.lastUsed = new Date().toISOString();
-        saveModels(models);
-    }
+async function deleteModelAndCleanup(id) {
+    await deleteProject(id, { trainer, audioTrainer, poseTrainer });
 }
 
 function renderModels() {
@@ -158,7 +109,7 @@ function renderModels() {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             if (confirm('¿Eliminar este proyecto?')) {
-                await deleteModel(btn.dataset.id);
+                await deleteModelAndCleanup(btn.dataset.id);
                 renderModels();
                 showToast('Proyecto eliminado', 'success');
             }
@@ -750,9 +701,14 @@ function updateClassUI(classIndex) {
     if (!card) return;
     const t = getTrainer();
     const c = t.getClasses()[classIndex];
+    if (!c) return;
 
     const badge = card.querySelector('.sample-badge');
     if (badge) badge.textContent = `${c.count} muestras`;
+
+    // Audio progress bar (only exists for audio trainer)
+    const fill = card.querySelector('.audio-sample-bar-fill');
+    if (fill) fill.style.width = Math.min(100, (c.count / 20) * 100) + '%';
 
     const gallery = card.querySelector('.sample-gallery');
     if (gallery) {
@@ -776,32 +732,26 @@ function updateClassUI(classIndex) {
 }
 
 function renderTrainingClasses() {
-    if (currentModel?.projectType === 'audio') {
-        renderAudioTrainingClasses();
-        return;
-    }
-    if (currentModel?.projectType === 'pose') {
-        renderPoseTrainingClasses();
-        return;
-    }
-
+    const projectType = currentModel?.projectType || 'image';
+    const config = getConfig(projectType);
+    const t = getTrainer();
     const container = document.getElementById('trainingClassesList');
-    const cls = trainer.getClasses();
+    const cls = t.getClasses();
 
     container.innerHTML = cls.map((c, i) => {
         const color = getClassColor(i);
-        const samples = trainer.getSamples(i);
+        const samples = t.getSamples(i);
+        const isFixed = config.fixedFirstClass && i === 0;
         const pct = Math.min(100, (c.count / 20) * 100);
 
-        return `
-        <div class="training-class-card" data-index="${i}">
-            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
-                <div class="class-card-header-left">
-                    <div class="class-dot" style="background:${color.dot};"></div>
-                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}" style="color:${color.headerText};">
-                </div>
-                <div class="class-card-header-right">
-                    <span class="sample-badge" data-index="${i}" style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
+        const progressBarHTML = config.showProgressBar ? `
+                <div class="audio-sample-info">
+                    <div class="audio-sample-bar-wrap">
+                        <div class="audio-sample-bar-fill" style="width:${pct}%"></div>
+                    </div>
+                </div>` : '';
+
+        const menuHTML = isFixed ? '' : `
                     <div class="class-menu-wrapper">
                         <button class="btn-class-menu" data-index="${i}" title="Opciones">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
@@ -809,31 +759,45 @@ function renderTrainingClasses() {
                             </svg>
                         </button>
                         <div class="class-dropdown">
-                            <button class="class-dropdown-item btn-clear-class" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
+                            <button class="class-dropdown-item btn-clear-samples" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
                                 </svg>
                                 Borrar muestras
                             </button>
-                            <button class="class-dropdown-item btn-delete-class danger" data-index="${i}">
+                            <button class="class-dropdown-item btn-delete-class-unified danger" data-index="${i}">
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
                                 </svg>
                                 Eliminar clase
                             </button>
                         </div>
-                    </div>
+                    </div>`;
+
+        return `
+        <div class="training-class-card" data-index="${i}">
+            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
+                <div class="class-card-header-left">
+                    <div class="class-dot" style="background:${color.dot};"></div>
+                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}"
+                        style="color:${color.headerText};" ${isFixed ? 'disabled' : ''}>
+                </div>
+                <div class="class-card-header-right">
+                    <span class="sample-badge" data-index="${i}"
+                        style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
+                    ${menuHTML}
                 </div>
             </div>
             <div class="class-card-body">
+                ${progressBarHTML}
                 <div class="class-capture-buttons">
-                    <button class="btn-capture-one" data-index="${i}" style="background:${color.bg}; color:${color.headerText}; border-color:${color.badge};">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
-                        Tomar
+                    <button class="btn-capture-one-unified" data-index="${i}" style="background:${color.bg}; color:${color.headerText}; border-color:${color.badge};">
+                        ${config.captureIcon}
+                        ${config.captureOneLabel}
                     </button>
-                    <button class="btn-capture-hold" data-index="${i}" style="background:${color.btnFill};">
+                    <button class="btn-capture-hold-unified" data-index="${i}" style="background:${color.btnFill};">
                         <span class="hold-dot"></span>
-                        Mantener
+                        ${config.captureHoldLabel}
                     </button>
                 </div>
                 <div class="sample-gallery">
@@ -848,151 +812,33 @@ function renderTrainingClasses() {
         </div>`;
     }).join('');
 
-    container.querySelectorAll('.class-name-input').forEach(input => {
-        input.addEventListener('change', () => {
-            trainer.renameClass(+input.dataset.index, input.value.trim());
-        });
-    });
-
-    container.querySelectorAll('.btn-class-menu').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const dropdown = btn.closest('.class-menu-wrapper').querySelector('.class-dropdown');
-            document.querySelectorAll('.class-dropdown.open').forEach(d => {
-                if (d !== dropdown) d.classList.remove('open');
-            });
-            dropdown.classList.toggle('open');
-        });
-    });
-
-    container.querySelectorAll('.btn-clear-class').forEach(btn => {
-        btn.addEventListener('click', () => {
-            trainer.clearSamples(+btn.dataset.index);
-            renderTrainingClasses();
-            updateTrainButton();
-        });
-    });
-
-    container.querySelectorAll('.btn-delete-class').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (trainer.getTotalClasses() <= 2) {
-                showToast('Mínimo 2 clases', 'error');
-                return;
-            }
-            trainer.removeClass(+btn.dataset.index);
-            renderTrainingClasses();
-        });
-    });
-
-    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const ci = +btn.dataset.ci;
-            trainer.deleteSample(ci, +btn.dataset.si);
-            updateClassUI(ci);
-        });
-    });
-
-    container.querySelectorAll('.btn-capture-one').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
-            trainer.captureOne(+btn.dataset.index, activeWebcam.canvas);
-            updateClassUI(+btn.dataset.index);
-        });
-    });
-
-    container.querySelectorAll('.btn-capture-hold').forEach(btn => {
-        const ci = +btn.dataset.index;
-        btn.addEventListener('click', () => {
-            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
-            if (btn.classList.contains('capturing')) {
-                btn.classList.remove('capturing');
-                trainer.stopCapture();
-                clearInterval(btn._updateInterval);
-                updateClassUI(ci);
-            } else {
-                container.querySelectorAll('.btn-capture-hold.capturing').forEach(other => {
-                    other.classList.remove('capturing');
-                    clearInterval(other._updateInterval);
-                });
-                btn.classList.add('capturing');
-                trainer.startCapture(ci, activeWebcam.canvas);
-                btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
-            }
-        });
-    });
-
+    wireTrainingClassEvents(container, config, t);
     updateTrainButton();
 }
 
-function renderPoseTrainingClasses() {
-    const container = document.getElementById('trainingClassesList');
-    const cls = poseTrainer.getClasses();
-
-    container.innerHTML = cls.map((c, i) => {
-        const color = getClassColor(i);
-        const samples = poseTrainer.getSamples(i);
-
-        return `
-        <div class="training-class-card" data-index="${i}">
-            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
-                <div class="class-card-header-left">
-                    <div class="class-dot" style="background:${color.dot};"></div>
-                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}" style="color:${color.headerText};">
-                </div>
-                <div class="class-card-header-right">
-                    <span class="sample-badge" data-index="${i}" style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
-                    <div class="class-menu-wrapper">
-                        <button class="btn-class-menu" data-index="${i}" title="Opciones">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
-                                <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
-                            </svg>
-                        </button>
-                        <div class="class-dropdown">
-                            <button class="class-dropdown-item btn-pose-clear" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
-                                </svg>
-                                Borrar muestras
-                            </button>
-                            <button class="class-dropdown-item btn-pose-delete danger" data-index="${i}">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
-                                </svg>
-                                Eliminar clase
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="class-card-body">
-                <div class="class-capture-buttons">
-                    <button class="btn-capture-one btn-pose-capture-one" data-index="${i}" style="background:${color.bg}; color:${color.headerText}; border-color:${color.badge};">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
-                        Tomar
-                    </button>
-                    <button class="btn-capture-hold btn-pose-capture-hold" data-index="${i}" style="background:${color.btnFill};">
-                        <span class="hold-dot"></span>
-                        Mantener
-                    </button>
-                </div>
-                <div class="sample-gallery">
-                    ${samples.map(s => `
-                        <div class="sample-thumb">
-                            <img src="${s.thumb}">
-                            <button class="btn-delete-sample" data-ci="${i}" data-si="${s.index}">×</button>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-
-    container.querySelectorAll('.class-name-input').forEach(input => {
+function wireTrainingClassEvents(container, config, t) {
+    // Rename
+    container.querySelectorAll('.class-name-input:not([disabled])').forEach(input => {
         input.addEventListener('change', () => {
-            poseTrainer.renameClass(+input.dataset.index, input.value.trim());
+            const newName = input.value.trim();
+            if (!newName) {
+                input.value = t.getClasses()[+input.dataset.index].name;
+                return;
+            }
+            if (config.renameRequiresTryCatch) {
+                try {
+                    t.renameClass(+input.dataset.index, newName);
+                } catch (e) {
+                    showToast(e.message, 'error');
+                    input.value = t.getClasses()[+input.dataset.index].name;
+                }
+            } else {
+                t.renameClass(+input.dataset.index, input.value.trim());
+            }
         });
     });
 
+    // Dropdown open/close
     container.querySelectorAll('.btn-class-menu').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1004,64 +850,138 @@ function renderPoseTrainingClasses() {
         });
     });
 
-    container.querySelectorAll('.btn-pose-clear').forEach(btn => {
+    // Clear samples
+    container.querySelectorAll('.btn-clear-samples').forEach(btn => {
         btn.addEventListener('click', () => {
-            poseTrainer.clearSamples(+btn.dataset.index);
+            t.clearSamples(+btn.dataset.index);
             renderTrainingClasses();
+            updateTrainButton();
+            if (config.captureMode === 'audio') showToast('Muestras borradas', 'success');
+        });
+    });
+
+    // Delete class
+    container.querySelectorAll('.btn-delete-class-unified').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (t.getTotalClasses() <= 2) {
+                showToast('Mínimo 2 clases', 'error');
+                return;
+            }
+            if (config.captureMode === 'audio') {
+                batchRecordingActive = false;
+                batchRecordingCancelled = true;
+            }
+            t.removeClass(+btn.dataset.index);
+            renderTrainingClasses();
+        });
+    });
+
+    // Delete individual sample
+    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const ci = +btn.dataset.ci;
+            t.deleteSample(ci, +btn.dataset.si);
+            updateClassUI(ci);
             updateTrainButton();
         });
     });
 
-    container.querySelectorAll('.btn-pose-delete').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (poseTrainer.getTotalClasses() <= 2) {
-                showToast('Mínimo 2 clases', 'error');
-                return;
-            }
-            poseTrainer.removeClass(+btn.dataset.index);
-            renderTrainingClasses();
+    // Capture one
+    if (config.captureMode === 'audio') {
+        container.querySelectorAll('.btn-capture-one-unified').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (audioTrainer.getIsRecording()) return;
+                await recordWithCountdown(+btn.dataset.index);
+            });
         });
-    });
-
-    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const ci = +btn.dataset.ci;
-            poseTrainer.deleteSample(ci, +btn.dataset.si);
-            updateClassUI(ci);
-        });
-    });
-
-    container.querySelectorAll('.btn-pose-capture-one').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
-            const ok = poseTrainer.captureOne(+btn.dataset.index, activeWebcam.canvas, activeWebcam.video);
-            if (!ok) showToast('No se detectó pose. Asegurate de estar visible en la cámara.', 'info');
-            updateClassUI(+btn.dataset.index);
-        });
-    });
-
-    container.querySelectorAll('.btn-pose-capture-hold').forEach(btn => {
-        const ci = +btn.dataset.index;
-        btn.addEventListener('click', () => {
-            if (!activeWebcam || activeWebcamTarget !== 'capture') return;
-            if (btn.classList.contains('capturing')) {
-                btn.classList.remove('capturing');
-                poseTrainer.stopCapture();
-                clearInterval(btn._updateInterval);
+    } else {
+        container.querySelectorAll('.btn-capture-one-unified').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+                const ci = +btn.dataset.index;
+                if (config.captureMode === 'webcam-skeleton') {
+                    const ok = t.captureOne(ci, activeWebcam.canvas, activeWebcam.video);
+                    if (!ok && config.captureOneFailMessage) {
+                        showToast(config.captureOneFailMessage, 'info');
+                    }
+                } else {
+                    t.captureOne(ci, activeWebcam.canvas);
+                }
                 updateClassUI(ci);
-            } else {
-                container.querySelectorAll('.btn-pose-capture-hold.capturing').forEach(other => {
-                    other.classList.remove('capturing');
-                    clearInterval(other._updateInterval);
-                });
-                btn.classList.add('capturing');
-                poseTrainer.startCapture(ci, activeWebcam.canvas, activeWebcam.video);
-                btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
-            }
+            });
         });
-    });
+    }
 
-    updateTrainButton();
+    // Capture hold / batch
+    if (config.captureMode === 'audio') {
+        container.querySelectorAll('.btn-capture-hold-unified').forEach(btn => {
+            const ci = +btn.dataset.index;
+            btn.addEventListener('click', async () => {
+                if (batchRecordingActive) {
+                    if (!batchRecordingCancelled) {
+                        batchRecordingCancelled = true;
+                        btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
+                    }
+                    return;
+                }
+
+                batchRecordingActive = true;
+                batchRecordingCancelled = false;
+                btn.classList.add('capturing');
+
+                const cancelBtn = document.getElementById('audioRecordCancelBtn');
+                cancelBtn.classList.add('visible');
+                cancelBtn.onclick = () => {
+                    if (!batchRecordingCancelled) {
+                        batchRecordingCancelled = true;
+                        btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
+                    }
+                };
+
+                for (let n = 1; n <= 10; n++) {
+                    if (batchRecordingCancelled) break;
+                    await recordWithCountdown(ci, n, 10);
+                    if (batchRecordingCancelled) break;
+                }
+
+                cancelBtn.classList.remove('visible');
+                cancelBtn.onclick = null;
+
+                batchRecordingActive = false;
+                batchRecordingCancelled = false;
+                btn.classList.remove('capturing');
+                btn.innerHTML = '<span class="hold-dot"></span> Mantener';
+
+                updateClassUI(ci);
+                updateTrainButton();
+            });
+        });
+    } else {
+        container.querySelectorAll('.btn-capture-hold-unified').forEach(btn => {
+            const ci = +btn.dataset.index;
+            btn.addEventListener('click', () => {
+                if (!activeWebcam || activeWebcamTarget !== 'capture') return;
+                if (btn.classList.contains('capturing')) {
+                    btn.classList.remove('capturing');
+                    t.stopCapture();
+                    clearInterval(btn._updateInterval);
+                    updateClassUI(ci);
+                } else {
+                    container.querySelectorAll('.btn-capture-hold-unified.capturing').forEach(other => {
+                        other.classList.remove('capturing');
+                        clearInterval(other._updateInterval);
+                    });
+                    btn.classList.add('capturing');
+                    if (config.captureMode === 'webcam-skeleton') {
+                        t.startCapture(ci, activeWebcam.canvas, activeWebcam.video);
+                    } else {
+                        t.startCapture(ci, activeWebcam.canvas);
+                    }
+                    btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
+                }
+            });
+        });
+    }
 }
 
 async function recordWithCountdown(classIndex, current = null, total = null) {
@@ -1101,230 +1021,8 @@ async function recordWithCountdown(classIndex, current = null, total = null) {
 
     modal.classList.add('hidden');
 
-    updateClassUIAudio(classIndex);
+    updateClassUI(classIndex);
     updateTrainButton();
-}
-
-function renderAudioTrainingClasses() {
-    const container = document.getElementById('trainingClassesList');
-    const cls = audioTrainer.getClasses();
-
-    container.innerHTML = cls.map((c, i) => {
-        const color = getClassColor(i);
-        const isBackground = i === 0; // "Ruido de fondo" is always index 0
-        const pct = Math.min(100, (c.count / 20) * 100);
-        const samples = audioTrainer.getSamples(i);
-
-        return `
-        <div class="training-class-card" data-index="${i}">
-            <div class="class-card-header" style="background:${color.bg}; border-bottom-color:${color.badge};">
-                <div class="class-card-header-left">
-                    <div class="class-dot" style="background:${color.dot};"></div>
-                    <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}"
-                        style="color:${color.headerText};" ${isBackground ? 'disabled' : ''}>
-                </div>
-                <div class="class-card-header-right">
-                    <span class="sample-badge" data-index="${i}"
-                        style="background:${color.badge}; color:${color.badgeText};">${c.count} muestras</span>
-                    ${isBackground ? '' : `
-                    <div class="class-menu-wrapper">
-                        <button class="btn-class-menu" data-index="${i}" title="Opciones">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="${color.icon}" stroke="none">
-                                <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
-                            </svg>
-                        </button>
-                        <div class="class-dropdown">
-                            <button class="class-dropdown-item btn-audio-clear" data-index="${i}"${c.count === 0 ? ' disabled' : ''}>
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
-                                </svg>
-                                Borrar muestras
-                            </button>
-                            <button class="class-dropdown-item btn-audio-delete danger" data-index="${i}">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
-                                </svg>
-                                Eliminar clase
-                            </button>
-                        </div>
-                    </div>`}
-                </div>
-            </div>
-            <div class="class-card-body">
-                <div class="audio-sample-info">
-                    <div class="audio-sample-bar-wrap">
-                        <div class="audio-sample-bar-fill" style="width:${pct}%"></div>
-                    </div>
-                </div>
-                <div class="class-capture-buttons">
-                    <button class="btn-audio-record" data-index="${i}">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                        Grabar
-                    </button>
-                    <button class="btn-audio-record-hold" data-index="${i}">
-                        <span class="hold-dot"></span>
-                        Mantener
-                    </button>
-                </div>
-                <div class="sample-gallery">
-                    ${samples.map(s => `
-                        <div class="sample-thumb">
-                            <img src="${s.thumb}">
-                            <button class="btn-delete-sample" data-ci="${i}" data-si="${s.index}">×</button>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-
-    // ── Rename ──
-    container.querySelectorAll('.class-name-input:not([disabled])').forEach(input => {
-        input.addEventListener('change', () => {
-            const newName = input.value.trim();
-            if (!newName) { input.value = audioTrainer.getClasses()[+input.dataset.index].name; return; }
-            try {
-                audioTrainer.renameClass(+input.dataset.index, newName);
-            } catch (e) {
-                showToast(e.message, 'error');
-                input.value = audioTrainer.getClasses()[+input.dataset.index].name;
-            }
-        });
-    });
-
-    // ── Dropdown open/close ──
-    container.querySelectorAll('.btn-class-menu').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const dropdown = btn.closest('.class-menu-wrapper').querySelector('.class-dropdown');
-            document.querySelectorAll('.class-dropdown.open').forEach(d => {
-                if (d !== dropdown) d.classList.remove('open');
-            });
-            dropdown.classList.toggle('open');
-        });
-    });
-
-    // ── Clear samples (clears ALL due to speech-commands API limitation) ──
-    container.querySelectorAll('.btn-audio-clear').forEach(btn => {
-        btn.addEventListener('click', () => {
-            audioTrainer.clearSamples(+btn.dataset.index);
-            renderTrainingClasses();
-            updateTrainButton();
-            showToast('Muestras borradas', 'success');
-        });
-    });
-
-    // ── Delete class ──
-    container.querySelectorAll('.btn-audio-delete').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (audioTrainer.getTotalClasses() <= 2) {
-                showToast('Mínimo 2 clases', 'error');
-                return;
-            }
-            batchRecordingActive = false;
-            batchRecordingCancelled = true;
-            audioTrainer.removeClass(+btn.dataset.index);
-            renderTrainingClasses();
-        });
-    });
-
-    // ── Delete individual sample ──
-    container.querySelectorAll('.btn-delete-sample').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const ci = +btn.dataset.ci;
-            audioTrainer.deleteSample(ci, +btn.dataset.si);
-            updateClassUIAudio(ci);
-            updateTrainButton();
-        });
-    });
-
-    // ── Single record (~1 second) with countdown ──
-    container.querySelectorAll('.btn-audio-record').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            if (audioTrainer.getIsRecording()) return;
-            await recordWithCountdown(+btn.dataset.index);
-        });
-    });
-
-    // ── Batch record (toggle: 10 muestras con countdown) ──
-    container.querySelectorAll('.btn-audio-record-hold').forEach(btn => {
-        const ci = +btn.dataset.index;
-
-        btn.addEventListener('click', async () => {
-            // Segundo click durante un batch: cancelar
-            if (batchRecordingActive) {
-                if (!batchRecordingCancelled) {
-                    batchRecordingCancelled = true;
-                    btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
-                }
-                return;
-            }
-
-            // Primer click: iniciar batch de 10 grabaciones
-            batchRecordingActive = true;
-            batchRecordingCancelled = false;
-            btn.classList.add('capturing');
-
-            const cancelBtn = document.getElementById('audioRecordCancelBtn');
-            cancelBtn.classList.add('visible');
-            cancelBtn.onclick = () => {
-                if (!batchRecordingCancelled) {
-                    batchRecordingCancelled = true;
-                    btn.innerHTML = '<span class="hold-dot"></span> Cancelando...';
-                }
-            };
-
-            for (let n = 1; n <= 10; n++) {
-                if (batchRecordingCancelled) break;
-                await recordWithCountdown(ci, n, 10);
-                if (batchRecordingCancelled) break;
-            }
-
-            cancelBtn.classList.remove('visible');
-            cancelBtn.onclick = null;
-
-            batchRecordingActive = false;
-            batchRecordingCancelled = false;
-            btn.classList.remove('capturing');
-            btn.innerHTML = '<span class="hold-dot"></span> Mantener';
-
-            updateClassUIAudio(ci);
-            updateTrainButton();
-        });
-    });
-
-    updateTrainButton();
-}
-
-function updateClassUIAudio(classIndex) {
-    const card = document.querySelector(`#trainingClassesList [data-index="${classIndex}"]`);
-    if (!card) return;
-    const c = audioTrainer.getClasses()[classIndex];
-    if (!c) return;
-
-    const badge = card.querySelector('.sample-badge');
-    if (badge) badge.textContent = `${c.count} muestras`;
-
-    const fill = card.querySelector('.audio-sample-bar-fill');
-    if (fill) fill.style.width = Math.min(100, (c.count / 20) * 100) + '%';
-
-    const gallery = card.querySelector('.sample-gallery');
-    if (gallery) {
-        const samples = audioTrainer.getSamples(classIndex);
-        gallery.innerHTML = samples.map(s => `
-            <div class="sample-thumb">
-                <img src="${s.thumb}">
-                <button class="btn-delete-sample" data-ci="${classIndex}" data-si="${s.index}">×</button>
-            </div>
-        `).join('');
-        gallery.querySelectorAll('.btn-delete-sample').forEach(btn => {
-            btn.addEventListener('click', () => {
-                audioTrainer.deleteSample(+btn.dataset.ci, +btn.dataset.si);
-                updateClassUIAudio(classIndex);
-                updateTrainButton();
-            });
-        });
-    }
 }
 
 function updateTrainButton() {
@@ -1484,7 +1182,6 @@ document.getElementById('addClassBtn').addEventListener('click', () => {
 
 document.getElementById('trainBtn').addEventListener('click', async () => {
     const btn = document.getElementById('trainBtn');
-    const text = document.getElementById('trainProgressText');
     const isAudio = currentModel?.projectType === 'audio';
     const t = getTrainer();
 
@@ -1495,44 +1192,50 @@ document.getElementById('trainBtn').addEventListener('click', async () => {
     }
 
     btn.disabled = true;
-    btn.querySelector('.train-label').textContent = 'Entrenando...';
-    btn.classList.add('training');
-    text.textContent = '0%';
+
+    // Show training overlay
+    const overlay = document.getElementById('trainingOverlay');
+    const overlayPct = document.getElementById('trainingOverlayPct');
+    const overlayLabel = overlay.querySelector('.training-overlay-label');
+    overlayPct.className = 'training-overlay-pct';
+    overlayPct.textContent = '0%';
+    overlayLabel.textContent = 'Entrenando modelo...';
+    overlay.classList.remove('hidden');
 
     try {
         await t.saveSamples(currentModel.id);
         await t.train((epoch, total) => {
-            const pct = ((epoch + 1) / total * 100);
-            text.textContent = `${Math.round(pct)}%`;
+            const pct = Math.round((epoch + 1) / total * 100);
+            overlayPct.textContent = `${pct}%`;
         });
 
-        showToast('Modelo entrenado', 'success');
+        // Show completion briefly
+        overlayPct.classList.add('done');
+        overlayPct.textContent = '✓';
+        overlayLabel.textContent = 'Modelo entrenado';
+        await new Promise(r => setTimeout(r, 600));
 
         const localModelInfo = await t.saveModel(currentModel.id);
-        const models = loadModels();
-        const project = models.find(m => m.id === currentModel.id);
-        if (project) {
-            project.localModel = localModelInfo;
-            project.classNames = localModelInfo.classNames;
-            saveModels(models);
-            currentModel = project;
-        }
+        const updated = updateProjectModel(currentModel.id, localModelInfo);
+        if (updated) currentModel = updated;
         renderModels();
+
+        overlay.classList.add('hidden');
+        overlayLabel.textContent = 'Entrenando modelo...';
 
         await openPredictionScreen(currentModel);
 
     } catch (error) {
         console.error('Training error:', error);
+        overlay.classList.add('hidden');
+        overlayLabel.textContent = 'Entrenando modelo...';
         showToast(error.message, 'error');
 
-        // If audio training failed but model was previously trained, resume listening
         if (isAudio && audioTrainer.isTrained()) {
             await audioTrainer.startListening(preds => renderTrainingPredictions(preds));
         }
     }
 
-    btn.querySelector('.train-label').textContent = 'Entrenar';
-    btn.classList.remove('training');
     btn.disabled = false;
 });
 

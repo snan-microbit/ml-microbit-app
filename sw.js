@@ -1,7 +1,7 @@
 // sw.js
 // Service Worker for PWA - Network First Strategy
 
-const CACHE_NAME = 'tm-microbit-v5.0';
+const CACHE_NAME = 'tm-microbit-v5.1';
 const urlsToCache = [
   './',
   './index.html',
@@ -9,6 +9,8 @@ const urlsToCache = [
   './manifest.json',
   // App scripts
   './js/app.js',
+  './js/project-store.js',
+  './js/trainer-config.js',
   './js/webcam.js',
   './js/image-trainer.js',
   './js/audio-trainer.js',
