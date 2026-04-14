@@ -27,6 +27,11 @@ let predictionExpanded = false;
 let batchRecordingActive = false;
 let batchRecordingCancelled = false;
 
+// Preview modal state
+let previewWebcam = null;
+let previewLoopRunning = false;
+let previewAudioVisualizerCanvas = null;
+
 const CLASS_COLORS = [
     { bg: '#E1F5EE', dot: '#1D9E75', btnFill: '#1D9E75', badge: '#9FE1CB', badgeText: '#0F6E56', headerText: '#085041', icon: '#0F6E56' },
     { bg: '#E6F1FB', dot: '#378ADD', btnFill: '#378ADD', badge: '#B5D4F4', badgeText: '#185FA5', headerText: '#0C447C', icon: '#185FA5' },
@@ -79,12 +84,26 @@ function renderModels() {
 
     const projectCards = models.map(model => `
         <div class="model-card">
+            <div class="class-menu-wrapper model-card-menu">
+                <button class="btn-class-menu" data-id="${model.id}" title="Opciones">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="#666" stroke="none">
+                        <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+                    </svg>
+                </button>
+                <div class="class-dropdown">
+                    <button class="class-dropdown-item danger" data-action="delete" data-id="${model.id}">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/>
+                        </svg>
+                        Eliminar proyecto
+                    </button>
+                </div>
+            </div>
             <div class="model-card-title">${escapeHtml(model.name)}</div>
             ${model.classNames ? `<div class="model-card-classes">${model.classNames.map(c => escapeHtml(c)).join(' · ')}</div>` : ''}
             <div class="model-card-date">${formatDate(model.createdAt)}</div>
             <div class="model-card-actions">
                 <button class="btn-card btn-use" data-action="open" data-id="${model.id}">Abrir</button>
-                <button class="btn-card btn-delete" data-action="delete" data-id="${model.id}">🗑</button>
             </div>
         </div>
     `).join('');
@@ -113,6 +132,17 @@ function renderModels() {
                 renderModels();
                 showToast('Proyecto eliminado', 'success');
             }
+        });
+    });
+
+    modelsList.querySelectorAll('.btn-class-menu').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropdown = btn.nextElementSibling;
+            document.querySelectorAll('.class-dropdown.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
         });
     });
 }
@@ -172,6 +202,7 @@ async function openPredictionScreen(model) {
             canvas.style.background = '#fff';
             wrapper.innerHTML = '';
             wrapper.appendChild(canvas);
+            document.querySelector('.prediction-main-content')?.scrollTo(0, 0)
             await audioTrainer.startVisualizer(canvas);
             await audioTrainer.startListening(preds => renderTrainingPredictions(preds));
         } else if (isPose) {
@@ -215,6 +246,11 @@ async function openPredictionScreen(model) {
 async function openTrainingScreen(project) {
     document.getElementById('trainingModelName').textContent = project.name;
     document.getElementById('trainBtn').disabled = true;
+    const badge = document.getElementById('projectTypeBadge');
+    if (badge) {
+        const typeLabels = { image: 'imagen', audio: 'audio', pose: 'pose' };
+        badge.textContent = typeLabels[project.projectType] || project.projectType;
+    }
 
     stopPredictionLoop();
     closeCaptureWebcamSilent();
@@ -372,7 +408,7 @@ async function openCaptureWebcam() {
 
     activeWebcamTarget = 'capture';
 
-    const webcam = new Webcam(400, 400, true);
+    const webcam = new Webcam(true);
     await webcam.setup('user');
 
     // Abortar si el modo cambió durante el setup
@@ -404,7 +440,7 @@ async function openCaptureWebcamWithSkeleton() {
 
     activeWebcamTarget = 'capture';
 
-    const webcam = new Webcam(400, 400, true);
+    const webcam = new Webcam(true);
     await webcam.setup('user');
 
     if (activeWebcamTarget !== 'capture') {
@@ -416,8 +452,8 @@ async function openCaptureWebcamWithSkeleton() {
     activeWebcam = webcam;
 
     const displayCanvas = document.createElement('canvas');
-    displayCanvas.width = 400;
-    displayCanvas.height = 400;
+    displayCanvas.width = activeWebcam.width;
+    displayCanvas.height = activeWebcam.height;
     const displayCtx = displayCanvas.getContext('2d');
 
     const container = document.getElementById('captureWebcamContainer');
@@ -431,12 +467,12 @@ async function openCaptureWebcamWithSkeleton() {
         if (!activeWebcam) return;
 
         activeWebcam.update();
-        displayCtx.drawImage(activeWebcam.canvas, 0, 0, 400, 400);
+        displayCtx.drawImage(activeWebcam.canvas, 0, 0, activeWebcam.width, activeWebcam.height);
 
         try {
-            poseTrainer.extractKeypoints(activeWebcam.video, performance.now());
+            poseTrainer.extractKeypoints(activeWebcam.canvas, performance.now());
             const landmarks = poseTrainer.getLastLandmarks();
-            if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, 400, 400, true);
+            if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, activeWebcam.width, activeWebcam.height, false);
         } catch (e) {
             // ignore detection errors during preview
         }
@@ -452,17 +488,18 @@ async function startPosePredictionLoop() {
 
     const flip = trainingFacingMode === 'user';
     const wrapper = document.getElementById('prediction-webcam-wrapper');
-    activeWebcam = new Webcam(400, 400, flip);
+    activeWebcam = new Webcam(flip);
     await activeWebcam.setup(trainingFacingMode);
     await activeWebcam.play();
 
     const displayCanvas = document.createElement('canvas');
-    displayCanvas.width = 400;
-    displayCanvas.height = 400;
+    displayCanvas.width = activeWebcam.width;
+    displayCanvas.height = activeWebcam.height;
     const displayCtx = displayCanvas.getContext('2d');
 
     wrapper.innerHTML = '';
     wrapper.appendChild(displayCanvas);
+    document.querySelector('.prediction-main-content')?.scrollTo(0, 0);
 
     activeWebcamTarget = 'prediction';
     predictionLoopRunning = true;
@@ -475,14 +512,14 @@ async function startPosePredictionLoop() {
         if (!activeWebcam) return;
 
         activeWebcam.update();
-        displayCtx.drawImage(activeWebcam.canvas, 0, 0, 400, 400);
+        displayCtx.drawImage(activeWebcam.canvas, 0, 0, activeWebcam.width, activeWebcam.height);
 
         const landmarks = poseTrainer.getLastLandmarks();
-        if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, 400, 400, flip);
+        if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, activeWebcam.width, activeWebcam.height, false);
 
         if (!inFlight) {
             inFlight = true;
-            poseTrainer.predict(activeWebcam.video)
+            poseTrainer.predict(activeWebcam.canvas)
                 .then(preds => {
                     inFlight = false;
                     renderTrainingPredictions(preds);
@@ -524,12 +561,13 @@ async function startPredictionLoop() {
     stopPredictionLoop(); // destruir webcam previa si la hay
 
     const wrapper = document.getElementById('prediction-webcam-wrapper');
-    activeWebcam = new Webcam(400, 400, trainingFacingMode === 'user');
+    activeWebcam = new Webcam(trainingFacingMode === 'user');
     await activeWebcam.setup(trainingFacingMode);
     await activeWebcam.play();
 
     wrapper.innerHTML = '';
     wrapper.appendChild(activeWebcam.canvas);
+    document.querySelector('.prediction-main-content')?.scrollTo(0, 0);
 
     activeWebcamTarget = 'prediction';
     predictionLoopRunning = true;
@@ -568,8 +606,18 @@ function stopPredictionLoop() {
 
 async function flipTrainingCamera() {
     trainingFacingMode = trainingFacingMode === 'user' ? 'environment' : 'user';
-    stopPredictionLoop();
-    await new Promise(r => setTimeout(r, 250)); // wait for camera hardware to release
+
+    // Stop loop and camera without clearing the wrapper DOM so the
+    // last frame stays visible during the hardware transition.
+    predictionLoopRunning = false;
+    if (activeWebcam) {
+        activeWebcam.stop();
+        activeWebcam = null;
+        activeWebcamTarget = null;
+    }
+
+    await new Promise(r => setTimeout(r, 250));
+
     if (currentModel?.projectType === 'pose') {
         await startPosePredictionLoop();
     } else {
@@ -674,12 +722,18 @@ function renderTrainingPredictions(predictions) {
     const container = document.getElementById('prediction-predictions');
     if (!container || !predictions?.length) return;
 
-    const sorted = predictions.slice().sort((a, b) => b.probability - a.probability);
+    // Find the winner without reordering
+    let maxProb = -1;
+    let winnerIdx = -1;
+    predictions.forEach((pred, i) => {
+        const prob = pred.probability ?? 0;
+        if (prob > maxProb) { maxProb = prob; winnerIdx = i; }
+    });
 
-    container.innerHTML = sorted.map((pred, i) => {
+    container.innerHTML = predictions.map((pred, i) => {
         const pct = (pred.probability * 100).toFixed(1);
         return `
-            <div class="prediction-item ${i === 0 ? 'top' : ''}">
+            <div class="prediction-item ${i === winnerIdx ? 'top' : ''}">
                 <div class="prediction-header">
                     <span class="class-name">${escapeHtml(pred.className)}</span>
                     <span class="confidence">${pct}%</span>
@@ -690,8 +744,8 @@ function renderTrainingPredictions(predictions) {
             </div>`;
     }).join('');
 
-    if (isConnected() && sorted.length > 0) {
-        const top = sorted[0];
+    if (isConnected() && winnerIdx >= 0) {
+        const top = predictions[winnerIdx];
         sendToMicrobit(top.className, top.probability * 100);
     }
 }
@@ -706,9 +760,15 @@ function updateClassUI(classIndex) {
     const badge = card.querySelector('.sample-badge');
     if (badge) badge.textContent = `${c.count} muestras`;
 
-    // Audio progress bar (only exists for audio trainer)
-    const fill = card.querySelector('.audio-sample-bar-fill');
-    if (fill) fill.style.width = Math.min(100, (c.count / 20) * 100) + '%';
+    const nameInput = card.querySelector('.class-name-input');
+    if (nameInput) autoSizeInput(nameInput);
+
+    // Progress bar (all trainers)
+    const fill = card.querySelector('.sample-progress-fill');
+    if (fill) {
+        fill.style.width = Math.min(100, (c.count / 8) * 100) + '%';
+        fill.classList.toggle('ready', c.count >= 8);
+    }
 
     const gallery = card.querySelector('.sample-gallery');
     if (gallery) {
@@ -731,6 +791,15 @@ function updateClassUI(classIndex) {
     updateTrainButton();
 }
 
+function setActiveCard(cardElement) {
+    document.querySelectorAll('#trainingClassesList .training-class-card').forEach(c => {
+        c.classList.remove('class-card-active');
+    });
+    if (cardElement) {
+        cardElement.classList.add('class-card-active');
+    }
+}
+
 function renderTrainingClasses() {
     const projectType = currentModel?.projectType || 'image';
     const config = getConfig(projectType);
@@ -742,13 +811,11 @@ function renderTrainingClasses() {
         const color = getClassColor(i);
         const samples = t.getSamples(i);
         const isFixed = config.fixedFirstClass && i === 0;
-        const pct = Math.min(100, (c.count / 20) * 100);
+        const pct = Math.min(100, (c.count / 8) * 100);
 
         const progressBarHTML = config.showProgressBar ? `
-                <div class="audio-sample-info">
-                    <div class="audio-sample-bar-wrap">
-                        <div class="audio-sample-bar-fill" style="width:${pct}%"></div>
-                    </div>
+                <div class="sample-progress-wrap">
+                    <div class="sample-progress-fill${c.count >= 8 ? ' ready' : ''}" style="width:${pct}%"></div>
                 </div>` : '';
 
         const menuHTML = isFixed ? '' : `
@@ -781,6 +848,11 @@ function renderTrainingClasses() {
                     <div class="class-dot" style="background:${color.dot};"></div>
                     <input class="class-name-input" value="${escapeHtml(c.name)}" data-index="${i}"
                         style="color:${color.headerText};" ${isFixed ? 'disabled' : ''}>
+                    ${isFixed ? '' : `<svg class="pencil-edit-icon" width="12" height="12" viewBox="0 0 16 16" fill="none"
+                        stroke="${color.headerText}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                        style="opacity: 0.45; flex-shrink: 0; cursor: pointer;">
+                        <path d="M11.5 1.5l3 3L5 14H2v-3z"/><path d="M9.5 3.5l3 3"/>
+                    </svg>`}
                 </div>
                 <div class="class-card-header-right">
                     <span class="sample-badge" data-index="${i}"
@@ -813,10 +885,19 @@ function renderTrainingClasses() {
     }).join('');
 
     wireTrainingClassEvents(container, config, t);
+
+    const firstCard = container.querySelector('.training-class-card');
+    if (firstCard) setActiveCard(firstCard);
+
     updateTrainButton();
 }
 
 function wireTrainingClassEvents(container, config, t) {
+    // Activate card on click
+    container.querySelectorAll('.training-class-card').forEach(card => {
+        card.addEventListener('click', () => setActiveCard(card));
+    });
+
     // Rename
     container.querySelectorAll('.class-name-input:not([disabled])').forEach(input => {
         input.addEventListener('change', () => {
@@ -836,6 +917,12 @@ function wireTrainingClassEvents(container, config, t) {
                 t.renameClass(+input.dataset.index, input.value.trim());
             }
         });
+    });
+
+    // Auto-size name inputs to their content
+    container.querySelectorAll('.class-name-input').forEach(input => {
+        autoSizeInput(input);
+        input.addEventListener('input', () => autoSizeInput(input));
     });
 
     // Dropdown open/close
@@ -886,6 +973,18 @@ function wireTrainingClassEvents(container, config, t) {
         });
     });
 
+    // Pencil icon click — focus the name input
+    container.querySelectorAll('.pencil-edit-icon').forEach(icon => {
+        icon.addEventListener('click', () => {
+            const card = icon.closest('.training-class-card');
+            const input = card?.querySelector('.class-name-input');
+            if (input) {
+                input.focus();
+                input.select();
+            }
+        });
+    });
+
     // Capture one
     if (config.captureMode === 'audio') {
         container.querySelectorAll('.btn-capture-one-unified').forEach(btn => {
@@ -900,7 +999,7 @@ function wireTrainingClassEvents(container, config, t) {
                 if (!activeWebcam || activeWebcamTarget !== 'capture') return;
                 const ci = +btn.dataset.index;
                 if (config.captureMode === 'webcam-skeleton') {
-                    const ok = t.captureOne(ci, activeWebcam.canvas, activeWebcam.video);
+                    const ok = t.captureOne(ci, activeWebcam.canvas, activeWebcam.canvas, false);
                     if (!ok && config.captureOneFailMessage) {
                         showToast(config.captureOneFailMessage, 'info');
                     }
@@ -950,7 +1049,7 @@ function wireTrainingClassEvents(container, config, t) {
                 batchRecordingActive = false;
                 batchRecordingCancelled = false;
                 btn.classList.remove('capturing');
-                btn.innerHTML = '<span class="hold-dot"></span> Mantener';
+                btn.innerHTML = '<span class="hold-dot"></span> ' + config.captureHoldLabel;
 
                 updateClassUI(ci);
                 updateTrainButton();
@@ -965,19 +1064,22 @@ function wireTrainingClassEvents(container, config, t) {
                     btn.classList.remove('capturing');
                     t.stopCapture();
                     clearInterval(btn._updateInterval);
+                    btn.innerHTML = '<span class="hold-dot"></span> ' + config.captureHoldLabel;
                     updateClassUI(ci);
                 } else {
                     container.querySelectorAll('.btn-capture-hold-unified.capturing').forEach(other => {
                         other.classList.remove('capturing');
                         clearInterval(other._updateInterval);
+                        other.innerHTML = '<span class="hold-dot"></span> ' + config.captureHoldLabel;
                     });
                     btn.classList.add('capturing');
+                    btn.innerHTML = '<span class="hold-dot"></span> Detener';
                     if (config.captureMode === 'webcam-skeleton') {
-                        t.startCapture(ci, activeWebcam.canvas, activeWebcam.video);
+                        t.startCapture(ci, activeWebcam.canvas, activeWebcam.canvas, false);
                     } else {
                         t.startCapture(ci, activeWebcam.canvas);
                     }
-                    btn._updateInterval = setInterval(() => updateClassUI(ci), 300);
+                    btn._updateInterval = setInterval(() => updateClassUI(ci), 200);
                 }
             });
         });
@@ -1029,18 +1131,216 @@ function updateTrainButton() {
     const isAudio = currentModel?.projectType === 'audio';
     const t = getTrainer();
     const cls = t.getClasses();
-    const ready = cls.length >= 2 && cls.every(c => c.count >= 8);
     const isCameraModel = !isAudio;
-    document.getElementById('trainBtn').disabled = !ready || (isCameraModel && predictionLoopRunning);
+
+    const trainBtn = document.getElementById('trainBtn');
+    const label = trainBtn.querySelector('.train-label');
+
+    // Don't override during active training
+    if (trainBtn.classList.contains('training')) return;
+
+    const ready = cls.length >= 2 && cls.every(c => c.count >= 8);
+    trainBtn.disabled = !ready || (isCameraModel && predictionLoopRunning);
+
+    label.textContent = 'Entrenar';
+
+    if (!ready) {
+        if (cls.length < 2) {
+            trainBtn.title = 'Se necesitan al menos 2 clases';
+        } else {
+            const needSamples = cls.filter(c => c.count < 8);
+            if (needSamples.length === 1) {
+                trainBtn.title = `Faltan muestras en "${needSamples[0].name}" (mínimo 8)`;
+            } else {
+                trainBtn.title = `Faltan muestras en ${needSamples.length} clases (mínimo 8 por clase)`;
+            }
+        }
+    } else {
+        trainBtn.title = '';
+    }
 }
 
 // ============================================
-// MODAL
+// MODAL: PROBAR MODELO
 // ============================================
+
+async function openPreviewModal() {
+    const modal = document.getElementById('previewModal');
+    const subtitle = document.getElementById('previewModalSubtitle');
+    const wrapper = document.getElementById('previewVisorWrapper');
+    const cardsContainer = document.getElementById('previewClassCards');
+    const t = getTrainer();
+    const projectType = currentModel.projectType;
+    const classNames = t.getClassNames();
+
+    subtitle.textContent = `${currentModel.name} — ${classNames.length} clases entrenadas`;
+
+    cardsContainer.innerHTML = classNames.map((name, i) => {
+        const color = getClassColor(i).dot;
+        return `
+            <div class="preview-class-card" id="previewCard-${i}" data-color="${color}">
+                <div class="preview-class-card-header">
+                    <div class="preview-class-dot" style="background: ${color};"></div>
+                    <span class="preview-class-name">${escapeHtml(name)}</span>
+                    <span class="preview-class-pct" id="previewPct-${i}" style="color: #888;">0%</span>
+                </div>
+                <div class="preview-conf-track">
+                    <div class="preview-conf-fill" id="previewFill-${i}" style="width: 0%; background: ${color};"></div>
+                </div>
+            </div>`;
+    }).join('');
+
+    modal.classList.remove('hidden');
+    wrapper.innerHTML = '';
+
+    if (projectType === 'audio') {
+        await startPreviewAudio(wrapper, classNames);
+    } else if (projectType === 'pose') {
+        await startPreviewPose(wrapper, classNames);
+    } else {
+        await startPreviewImage(wrapper, classNames);
+    }
+}
+
+async function startPreviewImage(wrapper, classNames) {
+    previewWebcam = new Webcam(true);
+    await previewWebcam.setup('user');
+    await previewWebcam.play();
+    wrapper.appendChild(previewWebcam.canvas);
+
+    previewLoopRunning = true;
+    let inFlight = false;
+    const t = getTrainer();
+
+    function loop() {
+        if (!previewLoopRunning) return;
+        if (!previewWebcam) return;
+        previewWebcam.update();
+        if (!inFlight) {
+            inFlight = true;
+            t.predict(previewWebcam.canvas)
+                .then(preds => { inFlight = false; renderPreviewPredictions(preds, classNames); })
+                .catch(() => { inFlight = false; });
+        }
+        requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+}
+
+async function startPreviewPose(wrapper, classNames) {
+    previewWebcam = new Webcam(true);
+    await previewWebcam.setup('user');
+    await previewWebcam.play();
+
+    const displayCanvas = document.createElement('canvas');
+    displayCanvas.width = previewWebcam.width;
+    displayCanvas.height = previewWebcam.height;
+    const displayCtx = displayCanvas.getContext('2d');
+    wrapper.appendChild(displayCanvas);
+
+    previewLoopRunning = true;
+    let inFlight = false;
+    const t = getTrainer();
+
+    function loop() {
+        if (!previewLoopRunning) return;
+        if (!previewWebcam) return;
+        previewWebcam.update();
+        displayCtx.drawImage(previewWebcam.canvas, 0, 0, previewWebcam.width, previewWebcam.height);
+        const landmarks = poseTrainer.getLastLandmarks();
+        if (landmarks) poseTrainer.drawSkeleton(displayCtx, landmarks, previewWebcam.width, previewWebcam.height, false);
+        if (!inFlight) {
+            inFlight = true;
+            t.predict(previewWebcam.canvas)
+                .then(preds => { inFlight = false; renderPreviewPredictions(preds, classNames); })
+                .catch(() => { inFlight = false; });
+        }
+        requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+}
+
+async function startPreviewAudio(wrapper, classNames) {
+    previewAudioVisualizerCanvas = document.createElement('canvas');
+    previewAudioVisualizerCanvas.width = 400;
+    previewAudioVisualizerCanvas.height = 300;
+    previewAudioVisualizerCanvas.style.width = '100%';
+    previewAudioVisualizerCanvas.style.height = '100%';
+    previewAudioVisualizerCanvas.style.objectFit = 'contain';
+    wrapper.appendChild(previewAudioVisualizerCanvas);
+
+    await audioTrainer.startVisualizer(previewAudioVisualizerCanvas);
+    await audioTrainer.startListening(preds => renderPreviewPredictions(preds, classNames));
+    previewLoopRunning = true;
+}
+
+function renderPreviewPredictions(predictions, classNames) {
+    if (!predictions || !predictions.length) return;
+
+    let maxProb = -1;
+    let winnerIdx = -1;
+    predictions.forEach((pred, i) => {
+        const prob = pred.probability ?? pred.score ?? 0;
+        if (prob > maxProb) { maxProb = prob; winnerIdx = i; }
+    });
+
+    predictions.forEach((pred, i) => {
+        const prob = pred.probability ?? pred.score ?? 0;
+        const pct = Math.round(prob * 100);
+        const card = document.getElementById(`previewCard-${i}`);
+        const pctEl = document.getElementById(`previewPct-${i}`);
+        const fillEl = document.getElementById(`previewFill-${i}`);
+        if (!card || !pctEl || !fillEl) return;
+
+        pctEl.textContent = `${pct}%`;
+        fillEl.style.width = `${pct}%`;
+
+        if (i === winnerIdx) {
+            card.classList.add('winner');
+            card.style.borderLeftColor = card.dataset.color;
+            pctEl.style.color = card.dataset.color;
+        } else {
+            card.classList.remove('winner');
+            card.style.borderLeftColor = 'transparent';
+            pctEl.style.color = '#888';
+        }
+    });
+}
+
+function closePreviewModal() {
+    const modal = document.getElementById('previewModal');
+    const wrapper = document.getElementById('previewVisorWrapper');
+    const projectType = currentModel?.projectType;
+
+    previewLoopRunning = false;
+
+    if (projectType === 'audio') {
+        audioTrainer.stopListening();
+        audioTrainer.stopVisualizer();
+        previewAudioVisualizerCanvas = null;
+    } else {
+        if (previewWebcam) {
+            previewWebcam.stop();
+            previewWebcam = null;
+        }
+    }
+
+    wrapper.innerHTML = '';
+    modal.classList.add('hidden');
+}
 
 // ============================================
 // UTILITIES
 // ============================================
+
+function autoSizeInput(input) {
+    const measure = document.createElement('span');
+    measure.style.cssText = 'visibility:hidden;position:absolute;white-space:pre;font:inherit;font-size:0.875rem;font-weight:600;padding:0;';
+    document.body.appendChild(measure);
+    measure.textContent = input.value || input.placeholder || ' ';
+    input.style.width = (measure.offsetWidth + 4) + 'px';
+    document.body.removeChild(measure);
+}
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -1171,6 +1471,25 @@ document.getElementById('predictionRetrainBtn').addEventListener('click', async 
     await enterCaptureMode();
 });
 
+// Preview modal buttons
+document.getElementById('previewProgramBtn').addEventListener('click', () => {
+    closePreviewModal();
+    openPredictionScreen(currentModel);
+});
+
+document.getElementById('previewBackBtn').addEventListener('click', async () => {
+    closePreviewModal();
+    // Restart the training-screen webcam/visualizer that was stopped before training
+    const projectType = currentModel?.projectType;
+    if (projectType === 'audio') {
+        await openAudioVisualizer();
+    } else if (projectType === 'pose') {
+        await openCaptureWebcamWithSkeleton();
+    } else {
+        await openCaptureWebcam();
+    }
+});
+
 document.getElementById('predictionFlipBtn').addEventListener('click', () => flipTrainingCamera());
 document.getElementById('predictionExpandBtn').addEventListener('click', togglePredictionExpanded);
 
@@ -1178,6 +1497,9 @@ document.getElementById('addClassBtn').addEventListener('click', () => {
     const t = getTrainer();
     t.addClass(`Clase ${t.getTotalClasses() + 1}`);
     renderTrainingClasses();
+    const container = document.getElementById('trainingClassesList');
+    const cards = container.querySelectorAll('.training-class-card');
+    if (cards.length) setActiveCard(cards[cards.length - 1]);
 });
 
 document.getElementById('trainBtn').addEventListener('click', async () => {
@@ -1223,7 +1545,13 @@ document.getElementById('trainBtn').addEventListener('click', async () => {
         overlay.classList.add('hidden');
         overlayLabel.textContent = 'Entrenando modelo...';
 
-        await openPredictionScreen(currentModel);
+        // Reload samples so the training screen is ready when the user closes the modal
+        if (currentModel.projectType !== 'audio') {
+            await t.loadSamples(currentModel.id);
+            renderTrainingClasses();
+        }
+
+        await openPreviewModal();
 
     } catch (error) {
         console.error('Training error:', error);

@@ -90,15 +90,15 @@ function getTotalClasses() {
 // ============================================
 
 /**
- * Extract 33 keypoints from a video element.
+ * Extract 33 keypoints from an image source (canvas or video element).
  * Returns Float32Array(99) with [x,y,z] per keypoint, or null if no pose detected.
  */
-function extractKeypoints(videoElement, timestamp) {
+function extractKeypoints(imageSource, timestamp) {
     if (!poseLandmarker) return null;
 
     let result;
     try {
-        result = poseLandmarker.detectForVideo(videoElement, timestamp);
+        result = poseLandmarker.detectForVideo(imageSource, timestamp);
     } catch (e) {
         return null;
     }
@@ -191,8 +191,8 @@ function drawSkeleton(ctx, landmarks, canvasWidth, canvasHeight, flip = false) {
  * @param {boolean} flip - True when the display is horizontally mirrored (front camera).
  * Returns false if no pose detected.
  */
-function captureOne(classIndex, webcamCanvas, videoElement, flip = true) {
-    const features = extractKeypoints(videoElement, performance.now());
+function captureOne(classIndex, webcamCanvas, imageSource, flip = true) {
+    const features = extractKeypoints(imageSource, performance.now());
     if (!features) return false;
 
     // Generate thumbnail: webcam frame + skeleton overlay
@@ -213,14 +213,14 @@ function captureOne(classIndex, webcamCanvas, videoElement, flip = true) {
  * Start capturing continuously (~5fps).
  * @param {boolean} flip - True when the display is horizontally mirrored (front camera).
  */
-function startCapture(classIndex, webcamCanvas, videoElement, flip = true) {
+function startCapture(classIndex, webcamCanvas, imageSource, flip = true) {
     stopCapture();
 
     // Immediate capture
-    captureOne(classIndex, webcamCanvas, videoElement, flip);
+    captureOne(classIndex, webcamCanvas, imageSource, flip);
 
     captureIntervalId = setInterval(() => {
-        captureOne(classIndex, webcamCanvas, videoElement, flip);
+        captureOne(classIndex, webcamCanvas, imageSource, flip);
     }, 200);
 }
 
@@ -321,13 +321,13 @@ async function train(onProgress) {
 // ============================================
 
 /**
- * Predict pose class from a video element.
+ * Predict pose class from an image source (canvas or video element).
  * Returns [{className, probability}] or empty array if no pose detected.
  */
-async function predict(videoElement) {
+async function predict(imageSource) {
     if (!poseLandmarker || !head) return [];
 
-    const features = extractKeypoints(videoElement, performance.now());
+    const features = extractKeypoints(imageSource, performance.now());
     if (!features) return [];
 
     const prediction = tf.tidy(() => {

@@ -197,7 +197,7 @@ body {
 /* New Project card */
 .model-card-new {
     flex: 0 0 auto;
-    width: 160px;
+    width: 200px;
     scroll-snap-align: start;
     background: var(--primary);
     border: none;
@@ -217,6 +217,10 @@ body {
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
+}
+
+.model-card-new:hover {
+    filter: brightness(0.93);
 }
 
 .model-card-new:active {
@@ -239,7 +243,7 @@ body {
 
 .model-card {
     flex: 0 0 auto;
-    width: 160px;
+    width: 200px;
     scroll-snap-align: start;
     background: var(--surface);
     border: 2px solid var(--border);
@@ -248,11 +252,13 @@ body {
     transition: all 0.2s;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
-.model-card:active {
-    border-color: var(--primary);
-    transform: scale(0.98);
+.model-card > .model-card-menu {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
 }
 
 .model-card-title {
@@ -298,19 +304,23 @@ body {
     color: white;
 }
 
+.btn-use:hover {
+    filter: brightness(0.9);
+}
+
 .btn-use:active {
     background: var(--primary-hover);
 }
 
 .btn-delete {
     background: var(--surface);
-    color: var(--error);
+    color: var(--text-light);
     border: 2px solid var(--border);
 }
 
 .btn-delete:active {
-    background: #fee2e2;
-    border-color: var(--error);
+    background: #f0f0f0;
+    border-color: var(--text-light);
 }
 
 .empty-state {
@@ -342,6 +352,11 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.btn-back:hover {
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 6px;
 }
 
 .btn-back svg {
@@ -421,6 +436,10 @@ body {
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     transition: background 0.2s;
+}
+
+.btn-video-action:hover {
+    background: rgba(0, 0, 0, 0.6);
 }
 
 .btn-video-action:active {
@@ -672,6 +691,15 @@ body.prediction-expanded .prediction-actions {
     flex: 1;
 }
 
+.modal-footer .btn-primary:hover {
+    filter: brightness(0.9);
+}
+
+.modal-footer .btn-secondary:hover {
+    filter: brightness(0.95);
+    border-color: var(--primary);
+}
+
 /* ============================================
    TOAST
    ============================================ */
@@ -758,38 +786,48 @@ button, a, input {
 }
 
 .training-header {
-    height: 36px;
+    height: 44px;
     padding: 0 0.75rem;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
+    border-bottom: none;
+    background: #009f95;
     flex-shrink: 0;
-    position: relative;
 }
 
 .training-header .btn-back {
     padding: 4px;
     min-width: 28px;
     min-height: 28px;
-    background: none;
+    background: rgba(255, 255, 255, 0.2);
     border: none;
+    border-radius: 6px;
     flex-shrink: 0;
+    color: #fff;
 }
 
 .training-header h2 {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-light);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #fff;
     margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 60%;
+    flex: 1;
+    min-width: 0;
+}
+
+.project-type-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 2px 10px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
 }
 
 .btn-sm {
@@ -859,17 +897,17 @@ button, a, input {
     margin-bottom: 0.75rem;
 }
 
-#trainingClassesList {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
 .training-class-card {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid #d4ede9;
     border-radius: 12px;
     overflow: hidden;
+    flex-shrink: 0;
+}
+
+.training-class-card.class-card-active {
+    border-color: var(--primary);
+    border-width: 2px;
 }
 
 .class-card-header {
@@ -877,16 +915,16 @@ button, a, input {
     align-items: center;
     justify-content: space-between;
     padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid #d4ede9;
     gap: 8px;
 }
 
 .class-card-header-left {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex: 1;
+    gap: 4px;
     min-width: 0;
+    flex-shrink: 1;
 }
 
 .class-dot {
@@ -897,13 +935,14 @@ button, a, input {
 }
 
 .class-card-header .class-name-input {
-    font-size: 0.875rem;
-    font-weight: 600;
+    font-size: 0.95rem;
+    font-weight: 700;
     border: none;
     background: transparent;
     padding: 2px 0;
-    min-width: 0;
-    flex: 1;
+    min-width: 40px;
+    max-width: 100%;
+    width: auto;
     font-family: inherit;
     border-bottom: 1.5px solid transparent;
 }
@@ -911,6 +950,14 @@ button, a, input {
 .class-card-header .class-name-input:focus {
     outline: none;
     border-bottom-color: currentColor;
+}
+
+.pencil-edit-icon {
+    transition: opacity 0.15s;
+}
+
+.pencil-edit-icon:hover {
+    opacity: 0.8 !important;
 }
 
 .class-card-header-right {
@@ -926,12 +973,7 @@ button, a, input {
     padding: 2px 8px;
     border-radius: 6px;
     white-space: nowrap;
-    cursor: pointer;
     user-select: none;
-}
-
-.sample-badge:hover {
-    filter: brightness(0.93);
 }
 
 
@@ -979,6 +1021,11 @@ button, a, input {
     transform: scale(0.98);
 }
 
+.btn-capture-one-unified:hover,
+.btn-capture-hold-unified:hover {
+    filter: brightness(0.9);
+}
+
 .btn-capture-hold,
 .btn-capture-hold-unified {
     color: white;
@@ -991,12 +1038,6 @@ button, a, input {
     transform: scale(0.98);
 }
 
-.btn-capture-hold.capturing,
-.btn-capture-hold-unified.capturing {
-    background: #e63946 !important;
-    animation: pulse-capture 0.8s infinite;
-}
-
 .hold-dot {
     width: 8px;
     height: 8px;
@@ -1006,13 +1047,8 @@ button, a, input {
     flex-shrink: 0;
 }
 
-@keyframes pulse-capture {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-}
-
 .sample-gallery {
-    display: flex;
+    display: none;
     flex-wrap: wrap;
     gap: 4px;
     padding-top: 4px;
@@ -1023,32 +1059,36 @@ button, a, input {
     scrollbar-color: rgba(0,0,0,0.12) transparent;
 }
 
+.training-class-card.class-card-active .sample-gallery {
+    display: flex;
+}
+
 .sample-thumb {
     position: relative;
-    width: 36px;
-    height: 36px;
+    width: 56px;
+    height: 56px;
     flex-shrink: 0;
 }
 
 .sample-thumb img {
-    width: 36px;
-    height: 36px;
+    width: 56px;
+    height: 56px;
     object-fit: cover;
-    border-radius: 4px;
+    border-radius: 6px;
     display: block;
 }
 
 .btn-delete-sample {
     position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 16px;
-    height: 16px;
+    top: -5px;
+    right: -5px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     background: var(--error);
     color: white;
     border: 1.5px solid white;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     cursor: pointer;
     display: flex;
@@ -1079,6 +1119,10 @@ button, a, input {
     cursor: pointer;
     font-family: inherit;
     touch-action: manipulation;
+}
+
+.btn-add-class:hover {
+    background: rgba(0, 159, 149, 0.08);
 }
 
 .btn-add-class:active {
@@ -1153,6 +1197,11 @@ button, a, input {
     width: 100%;
 }
 
+.btn-project-type:hover {
+    filter: brightness(0.93);
+    border-color: var(--primary);
+}
+
 .btn-project-type:active {
     border-color: var(--primary);
     background: #e8f5f4;
@@ -1211,7 +1260,8 @@ button, a, input {
     flex: 1;
     display: flex;
     flex-direction: row;
-    overflow: hidden;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 .training-capture-section.hidden {
@@ -1221,17 +1271,20 @@ button, a, input {
 .capture-webcam-column {
     flex: 1;
     min-width: 0;
-    border-right: 2px solid var(--border);
+    border-right: none;
     background: var(--bg);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     padding: 1.25rem;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    max-height: 100vh;
 }
 
 .capture-webcam-container {
-    width: 100%;
-    max-width: 340px;
+    width: min(100%, calc(100vh - 80px));
     aspect-ratio: 1;
     border-radius: 12px;
     overflow: hidden;
@@ -1239,33 +1292,19 @@ button, a, input {
 }
 
 .capture-webcam-container canvas {
-    width: 100% !important;
-    height: auto !important;
+    width: 100%;
+    height: auto;
     display: block;
 }
 
 .capture-classes-column {
     flex: 1;
-    overflow-y: auto;
-    padding: 1rem 1.25rem 1.25rem;
+    overflow: hidden;
+    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
-}
-
-.capture-classes-column::-webkit-scrollbar {
-    width: 4px;
-}
-
-.capture-classes-column::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.12);
-    border-radius: 2px;
-}
-
-.capture-classes-column::-webkit-scrollbar-track {
-    background: transparent;
+    min-height: 0;
+    background: #f5f5f5;
 }
 
 /* ============================================
@@ -1356,6 +1395,14 @@ button, a, input {
         flex-direction: column;
         overflow-y: auto;
     }
+    .capture-classes-column {
+        overflow: visible;
+        min-height: unset;
+    }
+    #trainingClassesList {
+        overflow-y: visible;
+        flex: none;
+    }
     .capture-webcam-column {
         width: 100%;
         flex-shrink: 0;
@@ -1368,32 +1415,88 @@ button, a, input {
         background: transparent;
     }
     .capture-webcam-container {
-        width: 50%;
-        max-width: 200px;
+        width: 70%;
+        max-width: 280px;
     }
 }
 
 #trainingClassesList {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
 }
 
-.training-train-area {
-    margin-top: 1rem;
+#trainingClassesList::-webkit-scrollbar {
+    width: 4px;
+}
+
+#trainingClassesList::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+    border-radius: 2px;
+}
+
+#trainingClassesList::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.btn-add-class {
+    flex-shrink: 0;
+}
+
+/* ===== Classes card (training screen) ===== */
+
+.classes-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border-radius: 14px;
+    border: 1px solid #d4ede9;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.classes-card-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    padding: 10px;
+    background: #f0faf9;
+    scrollbar-width: thin;
 }
 
-/* "Entrenar" compacto — override del width: 100% global */
-.training-train-area .btn-primary {
-    width: auto;
+.classes-card-footer {
+    padding: 10px;
+    background: #f0faf9;
+    border-top: 1px solid #d4ede9;
+    flex-shrink: 0;
+}
+
+.classes-card-footer .btn-primary {
+    width: 100%;
     padding: 0.625rem 1.5rem;
     font-size: 1rem;
     min-height: 40px;
     border-radius: 8px;
     box-shadow: none;
+}
+
+.classes-card-footer .btn-primary:hover:not(:disabled) {
+    filter: brightness(0.9);
+}
+
+.classes-card-footer .btn-primary:disabled {
+    background: #b0b0b0;
+    box-shadow: none;
+    cursor: not-allowed;
 }
 
 .train-btn-pct {
@@ -1539,15 +1642,16 @@ button, a, input {
 
 .prediction-webcam-wrapper {
     width: 100%;
-    aspect-ratio: 1;
     border-radius: 10px;
     overflow: hidden;
     background: #000;
+    min-height: 100px;
 }
 
 .prediction-webcam-wrapper canvas {
-    width: 100% !important;
-    height: auto !important;
+    width: 100%;
+    height: auto;
+    display: block;
 }
 
 .training-predictions {
@@ -1774,23 +1878,24 @@ button, a, input {
     font-size: 80px;
 }
 
-/* Sample progress bar inside audio class card */
-.audio-sample-info {
+/* Sample progress bar (all trainers) */
+.sample-progress-wrap {
+    height: 4px;
+    background: #e0e0e0;
+    border-radius: 2px;
+    overflow: hidden;
     margin-bottom: 8px;
 }
 
-.audio-sample-bar-wrap {
-    height: 6px;
-    background: #e0e0e0;
-    border-radius: 3px;
-    overflow: hidden;
+.sample-progress-fill {
+    height: 100%;
+    background: #EF9F27;
+    border-radius: 2px;
+    transition: width 0.3s, background-color 0.3s;
 }
 
-.audio-sample-bar-fill {
-    height: 100%;
+.sample-progress-fill.ready {
     background: var(--primary);
-    border-radius: 3px;
-    transition: width 0.3s;
 }
 
 @media (max-width: 1023px) {
@@ -1900,4 +2005,269 @@ button, a, input {
 }
 .makecode-fallback-retry {
     min-width: 180px;
+}
+
+/* ===== Header de columna de clases (training screen) ===== */
+
+.training-classes-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: #009f95;
+    flex-shrink: 0;
+}
+
+.training-classes-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0;
+}
+
+.add-class-header-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    touch-action: manipulation;
+}
+
+.add-class-header-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.add-class-header-btn:active {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* ===== Modal: Probar modelo ===== */
+
+.preview-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.preview-modal.hidden {
+    display: none;
+}
+
+.preview-modal-content {
+    background: #fff;
+    border-radius: 16px;
+    width: 100%;
+    max-width: 900px;
+    max-height: 95vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.preview-modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.preview-modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: #333;
+}
+
+.preview-modal-subtitle {
+    font-size: 13px;
+    color: #888;
+    margin: 2px 0 0 0;
+}
+
+.preview-modal-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.preview-visor-col {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.preview-visor-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-height: 240px;
+    position: relative;
+}
+
+.preview-visor-wrapper canvas,
+.preview-visor-wrapper video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+}
+
+.preview-classes-col {
+    width: 280px;
+    border-left: 1px solid #e0e0e0;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+}
+
+.preview-classes-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.preview-class-card {
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.15s;
+    background: #fff;
+    border: 1px solid #e8e8e8;
+    border-left: 3px solid transparent;
+}
+
+.preview-class-card.winner {
+    /* border-left-color set dynamically via JS */
+}
+
+.preview-class-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.preview-class-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.preview-class-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: #333;
+    flex: 1;
+}
+
+.preview-class-pct {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.preview-conf-track {
+    height: 6px;
+    border-radius: 3px;
+    background: #f0f0f0;
+    overflow: hidden;
+}
+
+.preview-conf-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.15s ease-out;
+}
+
+.preview-modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    gap: 10px;
+}
+
+.preview-btn {
+    flex: 1;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: none;
+    transition: opacity 0.15s;
+}
+
+.preview-btn:hover {
+    opacity: 0.9;
+}
+
+.preview-btn-primary {
+    background: #009f95;
+    color: white;
+}
+
+.preview-btn-secondary {
+    background: #f5f5f5;
+    color: #333;
+    border: 1px solid #e0e0e0;
+}
+
+@media (max-width: 640px) {
+    .preview-modal {
+        padding: 0;
+    }
+
+    .preview-modal-content {
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+        height: 100vh;
+    }
+
+    .preview-modal-body {
+        flex-direction: column;
+    }
+
+    .preview-visor-col {
+        padding: 12px;
+    }
+
+    .preview-visor-wrapper {
+        min-height: 180px;
+        max-height: 40vh;
+    }
+
+    .preview-classes-col {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid #e0e0e0;
+        padding: 12px 16px;
+        overflow-y: auto;
+        max-height: 30vh;
+    }
+
+    .preview-modal-footer {
+        flex-direction: column-reverse;
+        gap: 8px;
+    }
 }

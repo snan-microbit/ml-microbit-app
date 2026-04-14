@@ -68,6 +68,7 @@ console.log('✅ MediaPipe loaded (self-hosted)');
                     </svg>
                 </button>
                 <h2 id="trainingModelName">Proyecto</h2>
+                <span class="project-type-badge" id="projectTypeBadge"></span>
             </header>
 
             <div class="training-capture-section" id="trainingCaptureSection">
@@ -75,13 +76,18 @@ console.log('✅ MediaPipe loaded (self-hosted)');
                     <div class="capture-webcam-container" id="captureWebcamContainer"></div>
                 </div>
                 <div class="capture-classes-column">
-                    <div id="trainingClassesList"></div>
-                    <button class="btn-add-class" id="addClassBtn">+ Nueva clase</button>
-                    <div class="training-train-area">
-                        <button class="btn-primary" id="trainBtn" disabled>
-                            <span class="train-label">Entrenar</span>
-                            <span class="train-btn-pct" id="trainProgressText"></span>
-                        </button>
+                    <div class="classes-card">
+                        <div class="training-classes-header">
+                            <h3 class="training-classes-title">Clases</h3>
+                            <button class="add-class-header-btn" id="addClassBtn" title="Agregar clase">+ Nueva clase</button>
+                        </div>
+                        <div class="classes-card-body" id="trainingClassesList"></div>
+                        <div class="classes-card-footer">
+                            <button class="btn-primary" id="trainBtn" disabled>
+                                <span class="train-label">Entrenar</span>
+                                <span class="train-btn-pct" id="trainProgressText"></span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -244,6 +250,43 @@ console.log('✅ MediaPipe loaded (self-hosted)');
         <div class="audio-record-modal-content">
             <div class="countdown-number" id="countdownNumber">3</div>
             <div class="countdown-label" id="countdownLabel">Prepárate...</div>
+        </div>
+    </div>
+
+    <!-- Modal: Probar modelo post-entrenamiento -->
+    <div id="previewModal" class="preview-modal hidden">
+        <div class="preview-modal-content">
+            <div class="preview-modal-header">
+                <div>
+                    <h2 class="preview-modal-title">Probar modelo</h2>
+                    <p class="preview-modal-subtitle" id="previewModalSubtitle"></p>
+                </div>
+            </div>
+            <div class="preview-modal-body">
+                <div class="preview-visor-col">
+                    <div class="preview-visor-wrapper" id="previewVisorWrapper">
+                        <!-- Webcam canvas o audio visualizer se insertan aquí dinámicamente -->
+                    </div>
+                </div>
+                <div class="preview-classes-col" id="previewClassesCol">
+                    <div class="preview-classes-label">Clases detectadas</div>
+                    <div id="previewClassCards"></div>
+                </div>
+            </div>
+            <div class="preview-modal-footer">
+                <button id="previewBackBtn" class="preview-btn preview-btn-secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+                    </svg>
+                    Tomar más muestras
+                </button>
+                <button id="previewProgramBtn" class="preview-btn preview-btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M7 5h10v2h2V3H5v4h2V5zm-2 8h2v-2H5v4h2v-2h10v2h2v-4h-2v2H7z"/>
+                    </svg>
+                    Programar micro:bit
+                </button>
+            </div>
         </div>
     </div>
 
