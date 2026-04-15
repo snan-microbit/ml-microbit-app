@@ -251,6 +251,8 @@ async function openTrainingScreen(project) {
         const typeLabels = { image: 'imagen', audio: 'audio', pose: 'pose' };
         badge.textContent = typeLabels[project.projectType] || project.projectType;
     }
+    const captureFlipBtn = document.getElementById('captureFlipBtn');
+    if (captureFlipBtn) captureFlipBtn.style.display = project.projectType === 'audio' ? 'none' : '';
 
     stopPredictionLoop();
     closeCaptureWebcamSilent();
@@ -408,8 +410,8 @@ async function openCaptureWebcam() {
 
     activeWebcamTarget = 'capture';
 
-    const webcam = new Webcam(true);
-    await webcam.setup('user');
+    const webcam = new Webcam(trainingFacingMode === 'user');
+    await webcam.setup(trainingFacingMode);
 
     // Abortar si el modo cambió durante el setup
     if (activeWebcamTarget !== 'capture') {
@@ -440,8 +442,8 @@ async function openCaptureWebcamWithSkeleton() {
 
     activeWebcamTarget = 'capture';
 
-    const webcam = new Webcam(true);
-    await webcam.setup('user');
+    const webcam = new Webcam(trainingFacingMode === 'user');
+    await webcam.setup(trainingFacingMode);
 
     if (activeWebcamTarget !== 'capture') {
         webcam.stop();
@@ -602,6 +604,39 @@ function stopPredictionLoop() {
         document.getElementById('prediction-webcam-wrapper').innerHTML = '';
     }
     updateTrainButton();
+}
+
+async function flipCaptureCamera() {
+    trainingFacingMode = trainingFacingMode === 'user' ? 'environment' : 'user';
+    if (activeWebcam) {
+        activeWebcam.stop();
+        activeWebcam = null;
+        activeWebcamTarget = null;
+    }
+    await new Promise(r => setTimeout(r, 250));
+    if (currentModel?.projectType === 'pose') {
+        await openCaptureWebcamWithSkeleton();
+    } else {
+        await openCaptureWebcam();
+    }
+}
+
+async function flipPreviewCamera() {
+    trainingFacingMode = trainingFacingMode === 'user' ? 'environment' : 'user';
+    previewLoopRunning = false;
+    if (previewWebcam) {
+        previewWebcam.stop();
+        previewWebcam = null;
+    }
+    await new Promise(r => setTimeout(r, 250));
+    const wrapper = document.getElementById('previewVisorWrapper');
+    const classNames = getTrainer().getClassNames();
+    wrapper.innerHTML = '';
+    if (currentModel?.projectType === 'pose') {
+        await startPreviewPose(wrapper, classNames);
+    } else {
+        await startPreviewImage(wrapper, classNames);
+    }
 }
 
 async function flipTrainingCamera() {
@@ -1193,6 +1228,9 @@ async function openPreviewModal() {
     modal.classList.remove('hidden');
     wrapper.innerHTML = '';
 
+    const previewFlip = document.getElementById('previewFlipBtn');
+    if (previewFlip) previewFlip.style.display = projectType === 'audio' ? 'none' : '';
+
     if (projectType === 'audio') {
         await startPreviewAudio(wrapper, classNames);
     } else if (projectType === 'pose') {
@@ -1203,8 +1241,8 @@ async function openPreviewModal() {
 }
 
 async function startPreviewImage(wrapper, classNames) {
-    previewWebcam = new Webcam(true);
-    await previewWebcam.setup('user');
+    previewWebcam = new Webcam(trainingFacingMode === 'user');
+    await previewWebcam.setup(trainingFacingMode);
     await previewWebcam.play();
     wrapper.appendChild(previewWebcam.canvas);
 
@@ -1228,8 +1266,8 @@ async function startPreviewImage(wrapper, classNames) {
 }
 
 async function startPreviewPose(wrapper, classNames) {
-    previewWebcam = new Webcam(true);
-    await previewWebcam.setup('user');
+    previewWebcam = new Webcam(trainingFacingMode === 'user');
+    await previewWebcam.setup(trainingFacingMode);
     await previewWebcam.play();
 
     const displayCanvas = document.createElement('canvas');
@@ -1492,6 +1530,8 @@ document.getElementById('previewBackBtn').addEventListener('click', async () => 
 
 document.getElementById('predictionFlipBtn').addEventListener('click', () => flipTrainingCamera());
 document.getElementById('predictionExpandBtn').addEventListener('click', togglePredictionExpanded);
+document.getElementById('captureFlipBtn').addEventListener('click', () => { if (currentModel?.projectType !== 'audio') flipCaptureCamera(); });
+document.getElementById('previewFlipBtn').addEventListener('click', () => { if (currentModel?.projectType !== 'audio') flipPreviewCamera(); });
 
 document.getElementById('addClassBtn').addEventListener('click', () => {
     const t = getTrainer();
