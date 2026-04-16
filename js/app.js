@@ -771,7 +771,7 @@ function renderTrainingPredictions(predictions) {
         const confColor = isWinner ? 'var(--primary)' : '#888';
         return `
             <div class="prediction-item ${isWinner ? 'top' : ''}">
-                <div class="prediction-header">
+                <div class="prediction-item-header">
                     <span class="class-name">${escapeHtml(pred.className)}</span>
                     <span class="confidence" style="color:${confColor}">${pct}%</span>
                 </div>
@@ -1210,7 +1210,7 @@ async function openPreviewModal() {
     const projectType = currentModel.projectType;
     const classNames = t.getClassNames();
 
-    subtitle.textContent = `${currentModel.name} — ${classNames.length} clases entrenadas`;
+    if (subtitle) subtitle.textContent = `${currentModel.name} — ${classNames.length} clases entrenadas`;
 
     cardsContainer.innerHTML = classNames.map((name, i) => {
         const color = getClassColor(i).dot;

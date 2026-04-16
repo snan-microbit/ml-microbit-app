@@ -544,7 +544,7 @@ body.prediction-expanded .prediction-actions {
     background: #fff;
 }
 
-.prediction-header {
+.prediction-item-header {
     display: flex;
     justify-content: space-between;
     margin-bottom: 0.5rem;
@@ -925,7 +925,7 @@ button, a, input {
     align-items: center;
     gap: 4px;
     min-width: 0;
-    flex-shrink: 1;
+    flex: 0 1 auto;
 }
 
 .class-dot {
@@ -940,10 +940,10 @@ button, a, input {
     font-weight: 700;
     border: none;
     background: transparent;
-    padding: 2px 0;
+    padding: 2px 0 2px 0;
+    field-sizing: content;
     min-width: 40px;
     max-width: 100%;
-    width: auto;
     font-family: inherit;
     border-bottom: 1.5px solid transparent;
 }
@@ -954,6 +954,8 @@ button, a, input {
 }
 
 .pencil-edit-icon {
+    display: block;
+    flex-shrink: 0;
     transition: opacity 0.15s;
 }
 
@@ -1284,11 +1286,17 @@ button, a, input {
     max-height: 100vh;
 }
 
-.capture-webcam-container {
+.capture-visor-wrap {
+    position: relative;
     width: min(100%, calc(100vh - 80px));
     aspect-ratio: 1;
     border-radius: 12px;
     overflow: hidden;
+}
+
+.capture-webcam-container {
+    width: 100%;
+    height: 100%;
     background: #000;
 }
 
@@ -1650,13 +1658,13 @@ button, a, input {
 /* ===== Flip buttons en training y preview ===== */
 
 .btn-capture-flip {
-    bottom: 1.75rem;
-    right: 1.75rem;
+    bottom: 0.75rem;
+    right: 0.75rem;
 }
 
 .btn-preview-flip {
-    bottom: 1.5rem;
-    right: 1.5rem;
+    bottom: 1.75rem;
+    right: 1.75rem;
 }
 
 .btn-pred-connect {
@@ -1967,7 +1975,9 @@ button, a, input {
     }
 
     .prediction-main-column {
-        flex: 0 0 auto;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
         border-right: none;
         border-top: 1px solid var(--border);
     }
@@ -1977,7 +1987,7 @@ button, a, input {
         flex-wrap: wrap;
         gap: 0.5rem;
         padding: 0.5rem;
-        overflow-y: visible;
+        overflow-y: auto;
     }
 
     .prediction-body .makecode-inline-panel {
@@ -2014,7 +2024,7 @@ button, a, input {
         padding: 0.5rem 0.625rem;
     }
 
-    .prediction-header {
+    .prediction-item-header {
         margin-bottom: 0.25rem;
     }
 
