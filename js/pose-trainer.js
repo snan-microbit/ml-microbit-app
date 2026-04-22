@@ -443,6 +443,13 @@ async function loadSamples(projectId) {
     const stored = await idbGet('tm-pose-samples-' + projectId);
     if (!stored?.length) return;
 
+    // Reset in-memory samples before loading to avoid duplication on repeated calls
+    // (e.g. after train() completes and the main flow calls loadSamples again).
+    classes.forEach(cls => {
+        cls.samples = [];
+        cls.count = 0;
+    });
+
     for (const s of stored) {
         if (!classes[s.ci]) continue;
         classes[s.ci].samples.push({

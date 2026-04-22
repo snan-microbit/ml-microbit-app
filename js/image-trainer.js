@@ -394,6 +394,16 @@ async function loadSamples(projectId) {
     const stored = await idbGet("tm-samples-" + projectId);
     if (!stored?.length) return;
 
+    // Reset in-memory samples before loading to avoid duplication on repeated calls.
+    // Dispose tensors first to prevent WebGL memory leaks. In the current flow this
+    // loop is a no-op (train() already clears samples), but it protects the contract
+    // for future callers.
+    classes.forEach(cls => {
+        cls.samples.forEach(s => s.tensor.dispose());
+        cls.samples = [];
+        cls.count = 0;
+    });
+
     const loadCanvas = document.createElement("canvas");
     loadCanvas.width = 224;
     loadCanvas.height = 224;
